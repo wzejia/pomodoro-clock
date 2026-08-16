@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "tray-menu",
+  "description": "Capability for the tray menu window (v11 自绘托盘菜单页：事件 listen/emit 走 core:default)",
+  "windows": ["tray-menu"],
+  "permissions": [
+    "core:default"
+  ]
+}

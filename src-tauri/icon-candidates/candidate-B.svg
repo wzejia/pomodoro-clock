@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="bg" cx="0.38" cy="0.28" r="0.95">
+      <stop offset="0" stop-color="#ff7a5e"/>
+      <stop offset="0.5" stop-color="#f23c26"/>
+      <stop offset="1" stop-color="#c42613"/>
+    </radialGradient>
+    <filter id="soft" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#6e1006" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <!-- 内凹盘面：深色内环+白环错位出纵深 -->
+  <circle cx="512" cy="522" r="284" fill="none" stroke="#8f1508" stroke-width="52" opacity="0.55"/>
+  <circle cx="512" cy="512" r="280" fill="none" stroke="#ffffff" stroke-width="44"/>
+  <!-- 10:09 苹果式指针角度 -->
+  <g filter="url(#soft)">
+    <line x1="512" y1="512" x2="399" y2="394" stroke="#ffffff" stroke-width="44" stroke-linecap="round"/>
+    <line x1="512" y1="512" x2="580" y2="345" stroke="#ffffff" stroke-width="44" stroke-linecap="round"/>
+    <circle cx="512" cy="512" r="30" fill="#ffffff"/>
+  </g>
+</svg>

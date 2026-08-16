@@ -1,0 +1,1179 @@
+/* ============================================================
+   番茄钟 · Apple 式设计语言
+   克制配色：专注红 / 休息绿；材料感：毛玻璃；动效：弹簧、可打断
+   ============================================================ */
+
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+
+  /* 浅色主题 */
+  /* R18 实证：透明 WebView2 的 backdrop-filter 只糊页内内容，糊不到桌面；
+     DWM Acrylic 又会把圆角外透明角填成方角。故材料走实心，保圆角保可读 */
+  --bg: #f4f4f8;
+  --bg-solid: #f5f5f7;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: #ffffff;
+  --hairline: rgba(0, 0, 0, 0.1);
+  --text: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-tertiary: #86868b;
+  --separator: rgba(0, 0, 0, 0.08);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.14), 0 1px 4px rgba(0, 0, 0, 0.08);
+  --accent: #0071e3;
+  --accent-text: #ffffff;
+  --btn-secondary: #dcdce2;
+  --bar-empty: rgba(0, 0, 0, 0.18);
+  --input-bg: rgba(120, 120, 128, 0.18); /* v8④：0.14→0.18，浅色 Switch 关态旋钮/轨道/卡片三层明度拉开 */
+  --track: rgba(120, 120, 128, 0.16); /* v8 R32 P2：空态短划只被 .week-track.empty 使用，0.1→0.16 提亮可发现性 */
+  --progress-track: rgba(0, 0, 0, 0.22);
+  --segment-active: #ffffff;
+  --btn-primary-bg: #1d1d1f;
+  --btn-primary-text: #ffffff;
+
+  --work: #ff3b30;
+  --work-text: #d70015; /* v8③：文字用深一号红（fill 红在浅底上对比不足），仅文字场景使用 */
+  --work-soft: rgba(255, 59, 48, 0.12);
+  --break: #34c759;
+  --break-soft: rgba(52, 199, 89, 0.14);
+  --long: #0a84ff;
+  --long-soft: rgba(10, 132, 255, 0.12);
+
+  --radius-panel: 22px;
+  --radius-card: 14px;
+  --spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --spring-gentle: cubic-bezier(0.25, 1, 0.5, 1);
+}
+
+[data-theme="dark"] {
+  --bg: #1c1c1e;
+  --bg-solid: #1c1c1e;
+  --surface: rgba(58, 58, 60, 0.9);
+  --surface-strong: #2c2c2e;
+  --hairline: rgba(255, 255, 255, 0.2);
+  --text: #f5f5f7;
+  --text-secondary: #adaeb2;
+  --text-tertiary: #84848a;
+  --separator: rgba(255, 255, 255, 0.1);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
+  --accent: #0a84ff;
+  --btn-secondary: #454547;
+  --bar-empty: rgba(255, 255, 255, 0.22);
+  --input-bg: rgba(120, 120, 128, 0.22);
+  --track: rgba(120, 120, 128, 0.36); /* v8 R32 P2：深色空态短划提亮（0.2 在深卡上一瞥不可辨） */
+  --progress-track: rgba(255, 255, 255, 0.2);
+  --segment-active: #636366; /* v8⑤：48484a→636366，深色分段选中 pill 与轨道明度差拉开 */
+  --btn-primary-bg: rgba(255, 255, 255, 0.92);
+  --btn-primary-text: #1d1d1f;
+
+  --work: #ff453a;
+  --work-text: #ff453a; /* 深底上 fill 红对比已够，文字同 fill */
+  --work-soft: rgba(255, 69, 58, 0.18);
+  --break: #30d158;
+  --break-soft: rgba(48, 209, 88, 0.16);
+  --long: #64d2ff;
+  --long-soft: rgba(100, 210, 255, 0.16);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  font-family: var(--font);
+  color: var(--text);
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+  font-feature-settings: "tnum";
+}
+
+/* ---------- 布局骨架：迷你 / 展开 ---------- */
+
+.app {
+  position: fixed;
+  left: 0;
+  top: 0;
+  /* 卡片尺寸由 JS/WAAPI 驱动（morph 动画）；静止态为迷你尺寸 */
+  width: 220px;
+  height: 76px;
+  background: var(--bg);
+  -webkit-backdrop-filter: blur(56px) saturate(1.8);
+  backdrop-filter: blur(56px) saturate(1.8);
+  /* 窗口矩形与元素同尺寸：外阴影无处渲染会被裁成角部黑边，故只留 hairline 描边 */
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+  overflow: hidden;
+}
+
+.app.mini { border-radius: 999px; }
+.app.expanded { border-radius: var(--radius-panel); }
+
+/* ---------- 迷你胶囊（固定自然尺寸，morph 期间被卡片裁切而非拉伸） ---------- */
+
+.pill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 220px;
+  height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  /* v8⑬：左右 inset 统一 16px（原 18/14 光学留白不对称，计时区偏左 2px） */
+  padding: 0 16px;
+  cursor: default;
+  /* 交叉淡入淡出：收起时延迟淡入（等卡片收缩近半） */
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.22s ease-out 0.16s, visibility 0s;
+}
+.app.expanded .pill {
+  /* 展开时快速淡出（旧内容先走） */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease-out, visibility 0s 0.12s;
+}
+
+.phase-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--work);
+  opacity: 0.6;
+  flex-shrink: 0;
+  margin-top: 1px;
+  transition: background-color 0.4s ease;
+}
+.app[data-phase="work"] .phase-dot { background: var(--work); }
+.app[data-phase="short_break"] .phase-dot { background: var(--break); }
+.app[data-phase="long_break"] .phase-dot { background: var(--long); }
+
+.pill-phase {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--work-text); /* v8③：浅色胶囊红字对比偏弱 → 文字专用深红 */
+  flex-shrink: 0;
+  transition: color 0.4s ease;
+}
+.app[data-phase="short_break"] .pill-phase { color: var(--break); }
+.app[data-phase="long_break"] .pill-phase { color: var(--long); }
+
+.pill-time {
+  flex: 1;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  text-align: center;
+}
+
+.app[data-status="paused"] .pill-time,
+.app[data-status="paused"] .panel-time { opacity: 0.45; transition: opacity 0.3s ease; }
+
+/* ---------- v11 胶囊底部 2px 进度条 ----------
+   贴底边（bottom:0），左右 26px inset 对齐胶囊底边平段（R38 圆角在底部 2px 处弦宽约 168px），
+   小进度也不会被圆角裁没；轨道 var(--progress-track) 极细一档，填充随阶段变色。
+   几何与材质无关（v8 立法：材质规则不得碰几何），明暗/材质全走既有变量。 */
+.pill-progress {
+  position: absolute;
+  left: 26px;
+  right: 26px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--progress-track);
+  overflow: hidden;
+  pointer-events: none;
+}
+#pill-progress-bar {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: var(--work);
+  /* 与面板 progress-bar 同节奏：250ms tick → 0.3s linear 连续推进；暂停时 remaining 冻结即停 */
+  transition: width 0.3s linear, background-color 0.4s ease;
+}
+.app[data-phase="short_break"] #pill-progress-bar { background: var(--break); }
+.app[data-phase="long_break"] #pill-progress-bar { background: var(--long); }
+
+.icon-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  display: grid;
+  place-items: center;
+  background: var(--btn-secondary);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+  /* v9：去 transform——缩放会重采样文字位图致悬停发毛；hover/active 只许明暗反馈 */
+  transition: filter 0.18s ease, opacity 0.15s ease;
+}
+[data-theme="dark"] .icon-btn { color: rgba(255, 255, 255, 0.85); }
+.icon-btn:hover { filter: brightness(0.94); }
+.icon-btn:active { filter: brightness(0.86); }
+[data-theme="dark"] .icon-btn:hover { filter: brightness(1.18); }
+[data-theme="dark"] .icon-btn:active { filter: brightness(0.82); }
+
+/* ---------- 展开面板 ---------- */
+
+.panel {
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* 固定自然尺寸预布局：morph 期间被卡片 overflow 裁切，内容零形变 */
+  width: 340px;
+  /* v11：456→467（抽屉加快捷键卡，与 main.ts PANEL_H 同步，两处必须同改） */
+  height: 467px;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 18px 14px;
+  gap: 14px;
+  /* 收起时快速淡出（旧内容先走） */
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease-out, visibility 0s 0.12s;
+}
+.app.expanded .panel {
+  /* 展开时延迟淡入（新内容后到，灵动岛节奏） */
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.22s ease-out 0.12s, visibility 0s;
+}
+
+.panel-head { text-align: center; cursor: grab; position: relative; }
+.panel-timer, .panel-phase, .panel-time, .progress-track { pointer-events: none; }
+
+.panel-phase {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+  color: var(--work-text); /* v8③：同 pill-phase */
+  transition: color 0.4s ease;
+}
+.app[data-phase="short_break"] .panel-phase { color: var(--break); }
+.app[data-phase="long_break"] .panel-phase { color: var(--long); }
+
+.panel-time {
+  font-size: 56px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  margin: 0 0 10px;
+}
+
+.progress-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--progress-track);
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  min-width: 5px;
+  border-radius: 999px;
+  background: var(--work);
+  transition: width 0.3s linear, background-color 0.4s ease;
+}
+.app[data-phase="short_break"] .progress-bar { background: var(--break); }
+.app[data-phase="long_break"] .progress-bar { background: var(--long); }
+
+/* ---------- 循环指示器：当前组已完成数亮，长休阶段全亮；点数=长休间隔（Rust snapshot 驱动） ---------- */
+.cycle-dots {
+  display: flex;
+  justify-content: center;
+  gap: 9px;
+  margin-top: 10px;
+  min-height: 6px;
+  pointer-events: none;
+}
+.cycle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: 1.5px solid var(--text-secondary);
+  /* v8⑭：空心态权重 0.6→0.85（描边辨识度不足） */
+  opacity: 0.85;
+  transition: background-color 0.3s ease, border-color 0.3s ease, opacity 0.3s ease;
+}
+.cycle-dot.lit { border-color: transparent; opacity: 1; background: var(--work); }
+.app[data-phase="short_break"] .cycle-dot.lit { background: var(--break); }
+.app[data-phase="long_break"] .cycle-dot.lit { background: var(--long); }
+/* v8 领导拍板：进行中第 N 个 = 半填充（iOS page control 中间态，R32 P2：只靠颜色不够，
+   形状级差异=左半实填），介于空心（未到）与全亮（完成）之间；数据仍来自 Rust snapshot */
+.cycle-dot.current {
+  opacity: 1;
+  border-color: var(--work);
+  background: linear-gradient(90deg, var(--work) 50%, transparent 50%);
+}
+
+/* ---------- 控件 ---------- */
+
+.controls { display: flex; gap: 8px; }
+
+.btn {
+  flex: 1;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  font-family: var(--font);
+  font-size: 14px;
+  font-weight: 500;
+  background: var(--btn-secondary);
+  color: var(--text);
+  cursor: pointer;
+  /* v9：去 transform（悬停发毛根因）；hover/active=明暗反馈，filter 不重采样文字 */
+  transition: filter 0.18s ease, background-color 0.2s ease;
+}
+[data-theme="dark"] .btn { color: rgba(255, 255, 255, 0.85); }
+[data-theme="dark"] .btn-primary { color: #fff; }
+.btn:hover { filter: brightness(0.96); }
+.btn:active { filter: brightness(0.88); transition-duration: 0.06s; }
+[data-theme="dark"] .btn:hover { filter: brightness(1.15); }
+[data-theme="dark"] .btn:active { filter: brightness(0.85); }
+
+.btn-primary {
+  background: var(--work);
+  color: #fff;
+  font-weight: 600;
+}
+.app[data-phase="short_break"] .btn-primary { background: var(--break); }
+.app[data-phase="long_break"] .btn-primary { background: var(--long); }
+
+/* ---------- 统计 ---------- */
+
+.stat-cards { display: flex; gap: 8px; }
+
+.stat-card {
+  flex: 1;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  padding: 12px 6px 10px;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+}
+.stat-num {
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.stat-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+
+.week-chart {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 6px;
+  height: 72px;
+  /* v8⑪：margin-top 8→4，补给 .week-title 的上方间距（节奏均衡） */
+  margin-top: 4px;
+  padding: 10px 12px 8px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  position: relative;
+}
+.chart-caption {
+  position: absolute;
+  top: 7px;
+  left: 12px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  letter-spacing: 0.02em;
+}
+.week-chart::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 26px;
+  height: 1px;
+  background: var(--separator);
+}
+.week-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 0; height: 100%; justify-content: flex-end; }
+.week-track {
+  width: 100%;
+  max-width: 22px;
+  height: 40px;
+  border-radius: 5px 5px 0 0;
+  background: var(--track);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+/* v8⑥：无数据日（含未来日）不画满高灰轨道（被误读为有数据/深色对比低），
+   收成基线上的 4px 占位短划——「空槽」而非「数据」 */
+.week-track.empty { height: 4px; border-radius: 999px; }
+/* v8⑦：有数据日去掉轨道灰底，红柱直接立在基线上——消除「红+灰两段式=渲染未完成」误读 */
+.week-track.has-data { background: transparent; }
+.week-bar {
+  width: 100%;
+  border-radius: 5px 5px 0 0;
+  background: var(--work);
+  opacity: 0.85;
+  height: 0;
+  transition: height 0.5s var(--spring-gentle), opacity 0.3s ease;
+}
+.week-col.today .week-bar { opacity: 1; }
+.week-col.today .week-day { color: var(--text); font-weight: 600; }
+/* v8⑪：统计卡与「本周」标题原仅 2px（节奏断裂）→ +8px；与「统计」标题两侧节奏均衡
+   （v10：.week-title 已由 .chart-head 复合行替代，margin-top 8 节奏沿用） */
+.chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 8px;
+  padding: 2px 0 6px;
+}
+.chart-title-wrap { flex: 1; display: flex; align-items: center; justify-content: center; gap: 2px; }
+.chart-title { font-size: 12px; color: var(--text-tertiary); letter-spacing: 0.02em; }
+/* v10：紧凑分段控件（范围 周/月、单位 个数/分钟），配方同 .theme-switch 小一号 */
+.seg-switch { display: flex; background: var(--separator); border-radius: 7px; padding: 2px; gap: 2px; }
+.seg-opt {
+  border: none;
+  background: transparent;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-family: var(--font);
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+.seg-opt.active { background: var(--segment-active); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+[data-theme="dark"] .seg-opt { color: #c7c7cc; }
+[data-theme="dark"] .seg-opt.active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
+}
+.month-nav {
+  border: none;
+  background: transparent;
+  /* R38 P3-2：翻页箭头偏弱 → 文字色升半档（tertiary→secondary），可点击性可发现 */
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 14px;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0 0 1px;
+}
+.month-nav:hover { background: var(--separator); color: var(--text); }
+.month-nav:disabled { opacity: 0.3; cursor: default; }
+.month-nav:disabled:hover { background: transparent; color: var(--text-tertiary); }
+/* class 选择器的 display 会盖掉 UA [hidden]（同权重后定义者胜），显式补刀 */
+.week-chart[hidden], .month-chart[hidden], .month-nav[hidden] { display: none; }
+
+/* v10：月历热力格——与周图同 72px 卡（面板高度预算不变），周一为首列，深浅=强度四档 */
+.month-chart {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: 1fr;
+  gap: 2px;
+  height: 72px;
+  margin-top: 4px;
+  padding: 7px 12px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+}
+.month-cell { border-radius: 2.5px; background: var(--work); }
+/* R38 评审 P2-1：占位格（上月尾巴）原完全透明 → 整月网格视觉缺角、数据落位读不出日历结构；
+   补上更淡一档的同系填充（iOS 日历邻月日灰显语义），网格完整、当月/邻月仍可辨 */
+.month-pad { border-radius: 2.5px; background: var(--track); opacity: 0.35; }
+/* R38 P3-3：空格网格感整图尺度偏弱 → 加深半档（0.4→0.5，纯调色不动几何） */
+.month-cell[data-level="0"] { background: var(--track); opacity: 0.5; }
+.month-cell[data-level="1"] { opacity: 0.35; }
+.month-cell[data-level="2"] { opacity: 0.55; }
+.month-cell[data-level="3"] { opacity: 0.78; }
+.month-cell[data-level="4"] { opacity: 1; }
+/* 今日格：发丝内描边定位（与周图今日加粗同语义，不打断热力层次） */
+.month-cell.today { box-shadow: inset 0 0 0 1px var(--text-secondary); }
+.week-day { font-size: 10px; color: var(--text-tertiary); margin-top: 6px; }
+
+/* ---------- 设置 ---------- */
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* v11：12→10 与抽屉档 9→7 同步降 2px（基础段当前无直接命中行，全部走抽屉档），保持两档差 3px 恒等 */
+  padding: 10px 14px;
+  font-size: 13px;
+}
+.setting-row { position: relative; }
+.setting-row + .setting-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 0;
+  height: 0.5px;
+  background: var(--hairline);
+}
+.section-caption {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 2px 14px 6px;
+  letter-spacing: 0.02em;
+}
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--input-bg);
+  border-radius: 999px;
+  padding: 2px 3px;
+}
+.stepper-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 13px;
+  color: var(--text);
+  padding: 0 7px;
+  margin: 0 1px;
+  border-left: 0.5px solid var(--separator);
+  border-right: 0.5px solid var(--separator);
+}
+.stepper-val input {
+  width: 30px;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  -moz-appearance: textfield;
+}
+.stepper-val input::-webkit-inner-spin-button,
+.stepper-val input::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.step-btn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+  /* v9：transition 去 transform */
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+.step-btn:hover { background: var(--separator); color: var(--text); }
+/* v9：按压去缩放 → 明度反馈（--input-bg 比 hover 的 --separator 深一档，明暗两档自适应） */
+.step-btn:active { background: var(--input-bg); color: var(--text); }
+.setting-input { color: var(--text-secondary); display: inline-flex; align-items: center; gap: 6px; }
+.setting-input input {
+  width: 40px;
+  padding: 3px 6px;
+  border: none;
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  outline: none;
+  transition: box-shadow 0.2s ease;
+}
+.setting-input input:focus { box-shadow: 0 0 0 2.5px var(--accent); }
+.stepper-val input:focus { box-shadow: none; background: var(--separator); border-radius: 5px; }
+
+.theme-switch {
+  display: flex;
+  background: var(--separator);
+  border-radius: 8px;
+  padding: 2px;
+  gap: 2px;
+}
+.theme-opt {
+  border: none;
+  background: transparent;
+  padding: 3px 12px;
+  border-radius: 6px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+.material-opt {
+  border: none;
+  background: transparent;
+  padding: 3px 12px;
+  border-radius: 6px;
+  font-family: var(--font);
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+.theme-opt.active,
+.material-opt.active {
+  background: var(--segment-active);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+}
+/* v8⑤：深色分段未选中文字对比提升（text-secondary #adaeb2 → #c7c7cc） */
+[data-theme="dark"] .theme-opt,
+[data-theme="dark"] .material-opt { color: #c7c7cc; }
+/* v8 R32 P3：深色选中 pill 加发丝边线（与轨道明度差追平浅色档存在感） */
+[data-theme="dark"] .theme-opt.active,
+[data-theme="dark"] .material-opt.active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
+}
+/* v8⑩：外观组两个分段控件等宽（液态玻璃 4 字 vs 浅色 2 字导致的宽度不一致） */
+.drawer .theme-switch { width: 136px; }
+.drawer .theme-opt,
+.drawer .material-opt { flex: 1; padding: 3px 6px; text-align: center; }
+
+.collapse-btn {
+  border: none;
+  background: var(--btn-secondary);
+  /* 唯一收起入口，箭头用正文色保证可发现性（R15 P1） */
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12px;
+  /* v8⑮：30px 圆钮 → 44x22 把手胶囊（sheet handle 语义，与面板容器关联；
+     评审裁决项 #7-6，把手=「拖拽/收起这片面板」的容器级构件） */
+  width: 44px;
+  height: 22px;
+  border-radius: 999px;
+  align-self: center;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  /* v9：去 transform；把手 hover=明度微变 */
+  transition: color 0.2s ease, filter 0.18s ease;
+}
+.collapse-btn:hover { color: var(--text); filter: brightness(0.94); }
+[data-theme="dark"] .collapse-btn:hover { filter: brightness(1.22); }
+
+/* ---------- 切换按钮（动态随阶段，纯文字与「重置」同风格） ---------- */
+.switch-label { font-size: 13px; }
+
+/* ---------- 面板底栏：齿轮已移除（设置入右键菜单），收起键居中 ---------- */
+.panel-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- 右键菜单（自绘苹果风：毛玻璃、圆角、弹簧入场，主题跟随变量） ---------- */
+.ctx-menu {
+  position: fixed;
+  left: 0;
+  top: 0;
+  /* v12：两菜单（应用内 fixed/托盘页 static）同规则贴内容——宽=最长项 textW+左 24 勾选槽+右 20 padding+菜单内边距 8，
+     零死白；托盘页 getBoundingClientRect 量出真实内容宽回告 tray_menu_fit（破 160 视口自证循环） */
+  width: max-content;
+  /* v8⑧：132px min-width 对单项「设置…」过宽（矮胖）→ 收窄贴内容；v12 保留 76 下限只兜「单项很短」 */
+  min-width: 76px;
+  padding: 4px;
+  background: var(--surface);
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.8);
+  border-radius: 10px;
+  box-shadow: var(--shadow), inset 0 0 0 0.5px var(--hairline);
+  z-index: 50;
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(0.96);
+  transition: opacity 0.15s ease-out, transform 0.18s var(--spring), visibility 0s 0.18s;
+}
+.ctx-menu.open {
+  opacity: 1;
+  visibility: visible;
+  transform: scale(1);
+  transition: opacity 0.15s ease-out, transform 0.18s var(--spring), visibility 0s;
+}
+.ctx-item {
+  display: block;
+  width: 100%;
+  /* v12：macOS 菜单铁律永不折行；右 padding 12→20 与左 24 勾选槽视觉平衡（18–20 区间评审对 HIG 定稿） */
+  white-space: nowrap;
+  /* v10：macOS 式勾选 gutter——全项统一左缩进，✓ 落在槽内（开机自启勾态） */
+  padding: 5px 20px 5px 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.ctx-item.checked::before {
+  content: "✓";
+  position: absolute;
+  left: 8px;
+  font-size: 11px;
+}
+.ctx-item:hover { background: var(--accent); color: var(--accent-text); }
+
+/* ---------- 设置抽屉（从右滑入覆盖） ---------- */
+.drawer {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-solid);
+  display: flex;
+  flex-direction: column;
+  /* R29 P1：内容高超预算 ~30px → padding 20→14、gap 10→6 回收 18px */
+  padding: 14px 18px;
+  gap: 6px;
+  transform: translateX(100%);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform 0.35s var(--spring), opacity 0.2s ease;
+  z-index: 20;
+}
+.app.drawer-open .drawer {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.drawer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* R29 P1：高度预算回收（10→4） */
+  margin-bottom: 4px;
+}
+.drawer-title { font-size: 16px; font-weight: 600; }
+.drawer .settings {
+  background: transparent;
+  /* 抽屉高度固定（=面板），分组卡片垂直拉开撑满，避免头重脚轻 */
+  flex: 1;
+  justify-content: space-evenly;
+}
+/* inset-grouped 分组卡片（iOS 设置页质感） */
+.group-card {
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+/* R29 P1：v6.1 加材质行后抽屉内容（~440px）超过可用高度（368px）——
+   overflow:hidden 的 flex 子项 min-height:auto 计算为 0，卡片被 flex-shrink
+   压矮并裁掉行尾（开关被拦腰切）。行垂直 padding 12→9，7 行共省 42px，明暗/材质通用 */
+/* v11：新增快捷键行（+1 卡 ~36px），行垂直 padding 9→7 再回收 2px×2——
+   实测行高 43→39（步进行）/44→40（主题材质行）/40→36（开关行），8 行共省 32px */
+.drawer .setting-row { padding: 7px 14px; }
+/* 组内行间 hairline 保留；卡片外的分隔由间距承担 */
+.drawer .setting-row + .setting-row::before { display: none; }
+.drawer .group-card .setting-row + .setting-row::before { display: block; }
+/* 抽屉节标题：归属下方分组的 iOS 节奏（上 6 下 2 左齐卡边）——几何两档材质恒等（v8 立法，见下） */
+/* v11：padding-top 6→4，与行高回收同预算（3 个节标题共省 6px），供快捷键行高度 */
+.drawer .section-caption { padding-top: 4px; padding-left: 2px; }
+
+/* ---------- iOS 风格 toggle 开关 ---------- */
+.toggle {
+  width: 36px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background: var(--input-bg);
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+  transition: background-color 0.25s ease;
+  flex-shrink: 0;
+}
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  transition: transform 0.25s var(--spring);
+}
+.toggle.on { background: var(--break); }
+.toggle.on .toggle-knob { transform: translateX(14px); }
+
+/* ---------- v11 快捷键行：键帽 + 一键关闭；录制/错误态（v9：hover 只用 filter 明暗） ---------- */
+.hotkey-ctl { display: inline-flex; align-items: center; gap: 6px; }
+.hotkey-cap {
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border: none;
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text);
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  transition: filter 0.18s ease, background-color 0.2s ease, color 0.2s ease;
+}
+.hotkey-cap:hover { filter: brightness(0.94); }
+[data-theme="dark"] .hotkey-cap:hover { filter: brightness(1.18); }
+.hotkey-cap.recording { background: var(--accent); color: #fff; }
+.hotkey-cap.error { background: var(--work); color: #fff; }
+.hotkey-cap.off { color: var(--text-tertiary); }
+.hotkey-off {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: none;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: var(--input-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: filter 0.18s ease;
+}
+.hotkey-off:hover { filter: brightness(0.9); }
+[data-theme="dark"] .hotkey-off:hover { filter: brightness(1.2); }
+
+/* 浏览器 mock 预览模式：给页面一个居中的”窗口”底（尺寸由 JS 内联驱动，同真实窗口） */
+body.mock-preview {
+  background: linear-gradient(135deg, #a8c0e8 0%, #d9b8d9 100%);
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+}
+body.mock-preview .app {
+  position: static;
+}
+
+/* ============================================================
+   液态玻璃材质（[data-material="liquid_glass"]，默认）
+   依据 docs/liquid-glass-spec.md（苹果官方出处）：
+   - 玻璃只上功能层（外壳/右键菜单/抽屉）；内容层（统计卡/周图/分组卡）保持实料（§2）
+   - regular 变体语义：可读性优先于通透度（§1）——alpha 保守偏高
+   - 拟态手法（§9 偏离声明）：分层渐变（sheen）+ 顶部镜面高光 + 内侧边缘光 + 底部内阴影纵深
+   - 胶囊=capsule（R=height/2）、右键菜单项同心（6=10-4）本已满足（§4）
+   【v8 立法】材质规则只允许改视觉效果：background / box-shadow / color /
+   border-color / backdrop-filter；禁止改几何：padding / margin / width / height /
+   gap / font-size / border-width（切换材质不得引起任何控件位移，P0 根因：
+   本节曾把 .drawer .section-caption padding-top 2→6，space-evenly 布局全排重排）
+   ============================================================ */
+
+/* ---------- 浅色 · 功能层外壳 ---------- */
+[data-material="liquid_glass"] .app {
+  background:
+    /* sheen：左上虚拟光源的斜向柔光（"reflects color and light of surrounding content"） */
+    linear-gradient(160deg,
+      rgba(255, 255, 255, 0.7) 0%,
+      rgba(255, 255, 255, 0.26) 36%,
+      rgba(255, 255, 255, 0.06) 62%,
+      rgba(255, 255, 255, 0.18) 100%),
+    /* 底霜层：比内容卡更灰更透，拉开层级（卡更白 → 浮在玻璃上） */
+    rgba(236, 236, 242, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),          /* 顶部镜面高光 */
+    inset 1px 0 0 rgba(255, 255, 255, 0.35),         /* 左缘折光 */
+    inset -1px 0 0 rgba(0, 0, 0, 0.04),
+    inset 0 -1.5px 2.5px rgba(0, 0, 0, 0.09),        /* 底部内阴影（玻璃厚度感） */
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.55),     /* 边缘光描边 */
+    inset 0 0 26px rgba(255, 255, 255, 0.12);        /* 内发光 */
+}
+
+/* ---------- 浅色 · 内容层（standard material，非玻璃：比外壳更白更实 → 层级分离） ---------- */
+[data-material="liquid_glass"] .stat-card,
+[data-material="liquid_glass"] .week-chart,
+[data-material="liquid_glass"] .month-chart,
+[data-material="liquid_glass"] .group-card {
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.6), 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+/* ---------- 浅色 · 控件（功能层元件：轻玻璃 chip） ---------- */
+[data-material="liquid_glass"] .btn,
+[data-material="liquid_glass"] .icon-btn,
+[data-material="liquid_glass"] .collapse-btn {
+  /* R30 P3：白 chip 落白玻璃只靠投影分离、与展示卡区分度低 → iOS tertiary 灰填充+柔影 */
+  /* v8②：明暗构件统一为同一配方（灰填充+顶高光+0.5px 描边+轻投影），仅 alpha 随主题换算 */
+  background: rgba(120, 120, 128, 0.1);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 0 0 0.5px rgba(0, 0, 0, 0.1),
+    0 1px 2px rgba(0, 0, 0, 0.05);
+}
+[data-material="liquid_glass"] .btn-primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 42%), var(--work);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -1px 1.5px rgba(0, 0, 0, 0.12);
+}
+[data-material="liquid_glass"] .app[data-phase="short_break"] .btn-primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 42%), var(--break);
+}
+[data-material="liquid_glass"] .app[data-phase="long_break"] .btn-primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 42%), var(--long);
+}
+/* R28：toggle 白旋钮融进白卡造成「被裁切」视错觉（几何实测无溢出）→ 旋钮加发丝描边 */
+[data-material="liquid_glass"] .toggle-knob {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25), 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+}
+[data-material="liquid_glass"] .stepper,
+[data-material="liquid_glass"] .setting-input input,
+[data-material="liquid_glass"] .theme-switch,
+[data-material="liquid_glass"] .seg-switch,
+[data-material="liquid_glass"] .hotkey-cap,
+[data-material="liquid_glass"] .hotkey-off {
+  /* R30 P2：白填充（0.42）落在纯白分组卡上不可见 → 改 iOS tertiary 灰填充 */
+  background: rgba(120, 120, 128, 0.12);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
+}
+[data-material="liquid_glass"] .theme-opt.active,
+[data-material="liquid_glass"] .material-opt.active,
+[data-material="liquid_glass"] .seg-opt.active {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+/* ---------- 浅色 · 右键菜单 / 抽屉（功能层玻璃；覆盖自身面板的浮层须近不透明防透字） ---------- */
+[data-material="liquid_glass"] .ctx-menu {
+  /* v13：液态语言移植自 .app 面板配方（见上「浅色 · 功能层外壳」）——多档 sheen 拉开明暗梯度 +
+     顶部镜面高光 + 左缘折光 + 底部内阴影厚度 + 内发光；底色 alpha 0.95 防透字纪律不动（v6.1 让步②）。
+     v13 校准①：首版白色 sheen 落在近白底上不可见（实测与经典 ΔRGB 仅 6~7）→ 玻璃感改走
+     「冷灰底霜 + 底部暗重」：底霜 247→241 冷灰（同面板 236 家族），加底部暗带梯度补厚度。
+     v13 校准②（round-44 P3）：浅档辨识度弱于深档（体内摆幅 19 vs 深档 23）→ 底带 0.06→0.09、
+     底部内阴影 0.16→0.2，摆幅拉至 ~25 与深档同量级（alpha 0.95 防透字纪律仍不动）。
+     托盘页同款签名在本文件末 .tray-menu-page 覆盖段，两处同步维护 */
+  background:
+    linear-gradient(160deg,
+      rgba(255, 255, 255, 0.62) 0%,
+      rgba(255, 255, 255, 0.26) 38%,
+      rgba(255, 255, 255, 0.08) 64%,
+      rgba(255, 255, 255, 0.2) 100%),
+    linear-gradient(180deg, rgba(30, 34, 45, 0) 50%, rgba(30, 34, 45, 0.09) 100%),
+    rgba(241, 242, 248, 0.95);
+  /* v8⑫：纯白边线在浅底上不可见、菜单仅靠投影定义 → 换深色发丝边线（与经典档 --hairline 一致）；
+     R34 P3 再加强 0.12→0.16（浅灰面板上分离仍弱半档）——v13 保留 0.16；底部内阴影 0.1→0.2 加强厚度 */
+  box-shadow: var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 1px 0 0 rgba(255, 255, 255, 0.35),
+    inset 0 -1.5px 2.5px rgba(0, 0, 0, 0.2),
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.16),
+    inset 0 0 14px rgba(255, 255, 255, 0.1);
+}
+[data-material="liquid_glass"] .drawer {
+  /* 抽屉承载设置表单且盖住计时区：可读性优先（spec §1 regular 语义）。
+     R28 P2：0.97 alpha 仍有 3% 透字（大字号白色计时数字残影）→ 全实底+轻 sheen */
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.18)),
+    rgb(245, 245, 249);
+}
+/* R27 P2：浅色抽屉分组卡与底零对比 → 纯白卡+发丝描边（iOS 分组列表：白卡浮于灰底） */
+[data-material="liquid_glass"] .drawer .group-card {
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+/* ---------- 深色 ---------- */
+[data-theme="dark"][data-material="liquid_glass"] .app {
+  background:
+    linear-gradient(160deg,
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0.07) 40%,
+      rgba(255, 255, 255, 0.02) 68%,
+      rgba(255, 255, 255, 0.08) 100%),
+    rgba(34, 34, 38, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 1px 0 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1.5px 2.5px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.2),
+    inset 0 0 26px rgba(255, 255, 255, 0.05);
+}
+[data-theme="dark"][data-material="liquid_glass"] .stat-card,
+[data-theme="dark"][data-material="liquid_glass"] .week-chart,
+[data-theme="dark"][data-material="liquid_glass"] .month-chart,
+[data-theme="dark"][data-material="liquid_glass"] .group-card {
+  /* R28 P3：深色卡与外壳亮度差小 → 提亮一档拉开层级 */
+  background: rgba(94, 94, 100, 0.6);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
+}
+[data-theme="dark"][data-material="liquid_glass"] .btn,
+[data-theme="dark"][data-material="liquid_glass"] .icon-btn,
+[data-theme="dark"][data-material="liquid_glass"] .collapse-btn {
+  /* v8②：与浅色同一四层配方（填充+顶高光+0.5px 描边+轻投影），alpha 按深底换算 */
+  background: rgba(96, 96, 102, 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), inset 0 0 0 0.5px rgba(255, 255, 255, 0.14),
+    0 1px 2px rgba(0, 0, 0, 0.3);
+}
+/* R28 P1：深色域 .btn（0,3,0 且位置靠后）盖过浅色域 .btn-primary（0,2,0）致深色主键失红
+   → 深色域内、.btn 之后补同权重主键规则（phase 变体 0,4,0 天然优先，无需补） */
+[data-theme="dark"][data-material="liquid_glass"] .btn-primary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 42%), var(--work);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -1px 1.5px rgba(0, 0, 0, 0.12);
+  color: #fff;
+}
+[data-theme="dark"][data-material="liquid_glass"] .stepper,
+[data-theme="dark"][data-material="liquid_glass"] .setting-input input,
+[data-theme="dark"][data-material="liquid_glass"] .theme-switch,
+[data-theme="dark"][data-material="liquid_glass"] .seg-switch,
+[data-theme="dark"][data-material="liquid_glass"] .hotkey-cap,
+[data-theme="dark"][data-material="liquid_glass"] .hotkey-off {
+  background: rgba(118, 118, 124, 0.24);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
+}
+[data-theme="dark"][data-material="liquid_glass"] .theme-opt.active,
+[data-theme="dark"][data-material="liquid_glass"] .material-opt.active,
+[data-theme="dark"][data-material="liquid_glass"] .seg-opt.active {
+  /* v8 R32 P3：与经典深色档同步加发丝边线（权重更高会盖过基线规则，需在此重复） */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
+}
+[data-theme="dark"][data-material="liquid_glass"] .ctx-menu {
+  /* v8 R33 P2：底色 42→56 提亮一档——菜单与深色面板 dark-on-dark 仅靠投影分层、
+     近似 glass-on-glass；发丝边线 0.18→0.22 同步加强（v13 保留 0.22 描边纪律）。
+     v13：对标深色 .app 再校准——多档 sheen + 顶高光 0.28→0.38 + 左缘折光 +
+     底部内阴影 0.45 厚度 + 内发光；底色 56→60 再提半档做玻璃分层提亮（alpha 0.97 不动） */
+  background:
+    linear-gradient(160deg,
+      rgba(255, 255, 255, 0.2) 0%,
+      rgba(255, 255, 255, 0.08) 40%,
+      rgba(255, 255, 255, 0.03) 66%,
+      rgba(255, 255, 255, 0.09) 100%),
+    rgba(60, 60, 64, 0.97);
+  box-shadow: var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    inset 1px 0 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1.5px 2.5px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.22),
+    inset 0 0 18px rgba(255, 255, 255, 0.05);
+}
+[data-theme="dark"][data-material="liquid_glass"] .drawer {
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03)),
+    rgb(32, 32, 36);
+}
+/* v8⑨：深色迷你胶囊（76px 高）顶部镜面高光带偏亮 → mini 专属降亮
+   （sheen 首 stop 0.22→0.13、顶高光 0.4→0.22、左缘 0.12→0.09；面板大面积保持原配方） */
+[data-theme="dark"][data-material="liquid_glass"] .app.mini {
+  background:
+    linear-gradient(160deg,
+      rgba(255, 255, 255, 0.13) 0%,
+      rgba(255, 255, 255, 0.05) 40%,
+      rgba(255, 255, 255, 0.02) 68%,
+      rgba(255, 255, 255, 0.06) 100%),
+    rgba(34, 34, 38, 0.78);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 1px 0 0 rgba(255, 255, 255, 0.09),
+    inset 0 -1.5px 2.5px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.2),
+    inset 0 0 26px rgba(255, 255, 255, 0.05);
+}
+
+/* v11 键帽状态色补强：材质段把 .hotkey-cap 收进控件灰底组后，浅色域权重（0,2,0）与
+   基线 .hotkey-cap.recording/.error 平权且定义在后，会盖掉录制蓝/错误红——
+   此处后置重申（浅色平权靠顺序）；深色域材质规则权重（0,3,0）更高，需同名权重补刀。
+   只改 background/color，不碰几何（v8 立法合规） */
+.hotkey-cap.recording { background: var(--accent); color: #fff; }
+.hotkey-cap.error { background: var(--work); color: #fff; }
+[data-theme="dark"] .hotkey-cap.recording { background: var(--accent); color: #fff; }
+[data-theme="dark"] .hotkey-cap.error { background: var(--work); color: #fff; }
+
+/* ---------- 可访问性退化（spec §6，WWDC25-219 转录 18:22 官方语义） ---------- */
+/* Reduced Transparency → “frostier”：霜度拉满近不透明、去 backdrop 依赖 */
+@media (prefers-reduced-transparency: reduce) {
+  [data-material="liquid_glass"] .app,
+  [data-material="liquid_glass"] .ctx-menu,
+  [data-material="liquid_glass"] .drawer {
+    background: rgba(244, 244, 248, 0.97);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  [data-theme="dark"][data-material="liquid_glass"] .app,
+  [data-theme="dark"][data-material="liquid_glass"] .ctx-menu,
+  [data-theme="dark"][data-material="liquid_glass"] .drawer {
+    background: rgba(28, 28, 32, 0.97);
+  }
+  [data-material="liquid_glass"] .stat-card,
+  [data-material="liquid_glass"] .week-chart,
+  [data-material="liquid_glass"] .month-chart,
+  [data-material="liquid_glass"] .group-card {
+    background: rgba(255, 255, 255, 0.94);
+  }
+  [data-theme="dark"][data-material="liquid_glass"] .stat-card,
+  [data-theme="dark"][data-material="liquid_glass"] .week-chart,
+  [data-theme="dark"][data-material="liquid_glass"] .month-chart,
+  [data-theme="dark"][data-material="liquid_glass"] .group-card {
+    background: rgba(56, 56, 60, 0.95);
+  }
+}
+/* Increased Contrast → 元素近纯黑/白 + 对比描边 */
+@media (prefers-contrast: more) {
+  [data-material="liquid_glass"] .app {
+    box-shadow: inset 0 0 0 1px var(--text);
+  }
+}
+
+/* ---------- v11 托盘菜单页：菜单即窗口内容 ----------
+   静态铺开填窗；窗口与菜单同尺寸——外阴影无处渲染会被裁成角部黑边（与 .app 同款教训，
+   styles.css .app 注释），只留 hairline 描边。放材质段之后用同/高一级特异性覆盖。 */
+.tray-menu-page .ctx-menu,
+[data-material="liquid_glass"] .tray-menu-page .ctx-menu,
+[data-theme="dark"][data-material="liquid_glass"] .tray-menu-page .ctx-menu {
+  position: static;
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  pointer-events: auto;
+  transition: none;
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+/* v13：托盘页液态菜单保留光影签名——inset 高光/内阴影在窗内渲染、不会被裁成角部黑边
+   （被禁的只有外阴影 var(--shadow)）；与上文两个液态 .ctx-menu 主规则同步维护 */
+[data-material="liquid_glass"] .tray-menu-page .ctx-menu {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 1px 0 0 rgba(255, 255, 255, 0.35),
+    inset 0 -1.5px 2.5px rgba(0, 0, 0, 0.2),
+    inset 0 0 0 0.5px rgba(0, 0, 0, 0.16),
+    inset 0 0 14px rgba(255, 255, 255, 0.1);
+}
+[data-theme="dark"][data-material="liquid_glass"] .tray-menu-page .ctx-menu {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    inset 1px 0 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1.5px 2.5px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.22),
+    inset 0 0 18px rgba(255, 255, 255, 0.05);
+}
+.tray-menu-page { background: transparent; }
+/* round-40 P2-1：瞬态菜单不留逐项焦点环。页面常驻不 reload，DOM 焦点跨 hide/show 残留，
+   键盘模态下窗口持焦时 UA :focus-visible 环（浅档深/深档浅）会钉在残留项上——照 macOS 菜单
+   无逐项焦点环处理，仅杀 outline（visual-only，不动几何；主窗 .ctx-item 焦点行为不受影响）。 */
+.tray-menu-page .ctx-item:focus,
+.tray-menu-page .ctx-item:focus-visible { outline: none; }

@@ -1,0 +1,14 @@
+[
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-mini.png", "rect": [50, 100, 290, 150], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-mini-bar-light.png", "zoom": 4, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-mini-dark.png", "rect": [50, 100, 290, 150], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-mini-bar-dark.png", "zoom": 4, "nearest": true, "bg": "#2C2C2E"},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-classic-mini.png", "rect": [50, 100, 290, 150], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-mini-bar-classic.png", "zoom": 4, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-mini.png", "rect": [55, 55, 290, 140], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-mini-full-light.png", "zoom": 3, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/screenshots/v11/traymenu-popup.png", "rect": [0, 0, 208, 164], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-tray-full-light.png", "zoom": 4, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/screenshots/v11/traymenu-popup-dark.png", "rect": [0, 0, 208, 164], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-tray-full-dark.png", "zoom": 4, "nearest": true, "bg": "#2C2C2E"},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/screenshots/v11/traymenu-autostart-on.png", "rect": [0, 70, 120, 130], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-tray-check.png", "zoom": 5, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-drawer.png", "rect": [80, 460, 400, 530], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-drawer-hotkey-light.png", "zoom": 3, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-drawer-dark.png", "rect": [80, 460, 400, 530], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-drawer-hotkey-dark.png", "zoom": 3, "nearest": true, "bg": "#2C2C2E"},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/screenshots/v11/hotkey-occupied-error.png", "rect": [80, 460, 400, 530], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-hotkey-error.png", "zoom": 3, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-ctx.png", "rect": [220, 250, 340, 360], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-ctx-light.png", "zoom": 4, "nearest": true},
+  {"image": "D:/VibeCoding/pomodoro-clock/docs/review/round-40-ctx-dark.png", "rect": [220, 250, 340, 360], "output": "D:/VibeCoding/pomodoro-clock/docs/review/z40-ctx-dark.png", "zoom": 4, "nearest": true, "bg": "#2C2C2E"}
+]

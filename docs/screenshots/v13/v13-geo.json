@@ -1,0 +1,118 @@
+{
+  "tray-light-liquid_glass": {
+    "x": 0,
+    "y": 0,
+    "w": 104,
+    "h": 116,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27,
+      27
+    ],
+    "theme": "light",
+    "material": "liquid_glass"
+  },
+  "ctx-dark-classic": {
+    "x": 170,
+    "y": 200,
+    "w": 104,
+    "h": 89,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27
+    ],
+    "iw": 340,
+    "ih": 467
+  },
+  "ctx-dark-liquid_glass": {
+    "x": 170,
+    "y": 200,
+    "w": 104,
+    "h": 89,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27
+    ],
+    "iw": 340,
+    "ih": 467
+  },
+  "ctx-light-classic": {
+    "x": 170,
+    "y": 200,
+    "w": 104,
+    "h": 89,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27
+    ],
+    "iw": 340,
+    "ih": 467
+  },
+  "tray-light-classic": {
+    "x": 0,
+    "y": 0,
+    "w": 104,
+    "h": 116,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27,
+      27
+    ],
+    "theme": "light",
+    "material": "classic"
+  },
+  "tray-dark-liquid_glass": {
+    "x": 0,
+    "y": 0,
+    "w": 104,
+    "h": 116,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27,
+      27
+    ],
+    "theme": "dark",
+    "material": "liquid_glass"
+  },
+  "tray-dark-classic": {
+    "x": 0,
+    "y": 0,
+    "w": 104,
+    "h": 116,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27,
+      27
+    ],
+    "theme": "dark",
+    "material": "classic"
+  },
+  "ctx-light-liquid_glass": {
+    "x": 170,
+    "y": 200,
+    "w": 104,
+    "h": 89,
+    "ow": 104,
+    "items": [
+      27,
+      27,
+      27
+    ],
+    "iw": 340,
+    "ih": 467
+  }
+}
