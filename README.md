@@ -1,20 +1,6 @@
 # 番茄钟（pomodoro-clock）
 
-Windows 桌面悬浮番茄时钟：迷你胶囊常驻桌面，专注/休息自动流转，统计本地持久化。Tauri 2 + Vanilla TS，计时与统计的唯一真相在 Rust，UI 只负责显示和转发事件。
-
-## 截图
-
-| 迷你胶囊 | 面板 + 液态玻璃菜单（暗色） |
-|:---:|:---:|
-| ![迷你胶囊](assets/mini.png) | ![面板与菜单](assets/panel-menu-dark.png) |
-
-| 面板 + 液态玻璃菜单（浅色） | 设置抽屉 |
-|:---:|:---:|
-| ![面板与菜单浅色](assets/panel-menu-light.png) | ![设置抽屉](assets/settings.png) |
-
-## 安装
-
-从 [Releases](https://github.com/wzejia/pomodoro-clock/releases) 下载最新 `pomodoro-clock_x.x.x_x64-setup.exe`（NSIS 安装包，约 2.2 MB），安装后开箱即用。
+一个简洁、好用的 Windows 桌面番茄时钟。安装包只有 2 MB，迷你胶囊常驻桌面，专注/休息自动流转，统计全部本地保存——无账号、无云端、无打扰。
 
 ## 功能
 
@@ -26,6 +12,30 @@ Windows 桌面悬浮番茄时钟：迷你胶囊常驻桌面，专注/休息自�
 - **双主题 × 双材质**：浅色/深色主题，经典/液态玻璃材质自由组合
 - **可配置**：工作/短休/长休时长、长休间隔、自动开始下一阶段，全部持久化到 `config.json`
 - **统计本地存储**：`stats.json` 存 exe 同目录，无云端、无账号
+
+## 界面预览
+
+迷你胶囊的材质 × 主题四种组合：
+
+| 经典 · 浅色 | 经典 · 深色 | 液态玻璃 · 浅色 | 液态玻璃 · 深色 |
+|:---:|:---:|:---:|:---:|
+| ![经典浅色](assets/mini-classic-light.png) | ![经典深色](assets/mini-classic-dark.png) | ![液态玻璃浅色](assets/mini-liquid_glass-light.png) | ![液态玻璃深色](assets/mini-liquid_glass-dark.png) |
+
+| 迷你胶囊 · 短休息 |
+|:---:|
+| ![迷你胶囊短休息](assets/mini-break.png) |
+
+| 统计面板（深色） | 面板 + 右键菜单（深色） |
+|:---:|:---:|
+| ![统计面板深色](assets/panel-dark.png) | ![面板与菜单深色](assets/panel-menu-dark.png) |
+
+| 面板 + 右键菜单（浅色） | 设置抽屉 |
+|:---:|:---:|
+| ![面板与菜单浅色](assets/panel-menu-light.png) | ![设置抽屉](assets/settings-drawer.png) |
+
+## 安装
+
+从 [Releases](https://github.com/wzejia/pomodoro-clock/releases) 下载最新 `pomodoro-clock_x.x.x_x64-setup.exe`（NSIS 安装包，约 2.2 MB），安装后开箱即用。
 
 ## 从源码构建
 
