@@ -1,8 +1,0 @@
-[
- {"image":"round-42-ctx-light-classic.png","rect":[222,252,248,278],"output":"r43/corner-ctx-light.png","zoom":8,"nearest":true},
- {"image":"round-42-tray-light.png","rect":[16,16,42,42],"output":"r43/corner-tray-light.png","zoom":8,"nearest":true},
- {"image":"round-42-ctx-dark-liquid.png","rect":[222,252,248,278],"output":"r43/corner-ctx-dark.png","zoom":8,"nearest":true,"bg":"#2C2C2E"},
- {"image":"round-42-tray-dark.png","rect":[16,16,42,42],"output":"r43/corner-tray-dark.png","zoom":8,"nearest":true,"bg":"#2C2C2E"},
- {"image":"round-42-ctx-light-classic.png","rect":[60,240,400,520],"output":"r43/surround-light.png","zoom":2,"nearest":true},
- {"image":"round-42-ctx-dark-liquid.png","rect":[60,240,400,520],"output":"r43/surround-dark.png","zoom":2,"nearest":true,"bg":"#2C2C2E"}
-]

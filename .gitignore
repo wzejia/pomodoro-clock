@@ -30,3 +30,11 @@ src-tauri/target/
 memory/
 .claude/
 .playwright-mcp/
+
+# Dev-process artifacts (kept locally, excluded from repo)
+docs/
+scripts/
+/CLAUDE.md
+/CONCEPTS.md
+/PROGRESS.md
+/BLOCKED.md
