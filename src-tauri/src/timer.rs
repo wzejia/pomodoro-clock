@@ -38,6 +38,8 @@ pub struct TimerConfig {
     pub long_break_every: u32,
     /// 阶段结束后是否自动开跑下一阶段；false=停表等手动开始（默认）
     pub auto_start_next: bool,
+    /// 每日目标番茄数：统计周柱/月格刻度与目标虚线的锚点（个数；分钟口径=个数×工作时长）
+    pub daily_goal: u32,
 }
 
 impl Default for TimerConfig {
@@ -48,6 +50,7 @@ impl Default for TimerConfig {
             long_break_ms: 15 * 60 * 1000,
             long_break_every: 4,
             auto_start_next: false,
+            daily_goal: 8,
         }
     }
 }
@@ -92,6 +95,10 @@ pub struct TimerSnapshot {
     pub completed_work_count: u32,
     /// 循环指示器的数据源：圆点数随配置变，前端只取模不自计数
     pub long_break_every: u32,
+    /// 统计目标锚点（每日目标番茄数），周柱/月格刻度用；分钟口径换算需 work_ms 一并下发
+    pub daily_goal: u32,
+    /// 当前工作阶段时长（分钟口径目标线换算用；阶段字段而非剩余值，break 阶段下也取 work）
+    pub work_ms: u64,
 }
 
 pub struct Timer {
@@ -140,6 +147,8 @@ impl Timer {
             total_ms: self.phase_duration(self.phase),
             completed_work_count: self.completed_work_count,
             long_break_every: self.config.long_break_every,
+            daily_goal: self.config.daily_goal,
+            work_ms: self.config.work_ms,
         }
     }
 
@@ -393,6 +402,7 @@ mod tests {
             long_break_ms: 2_000,
             long_break_every: 2,
             auto_start_next: true,
+            daily_goal: 6,
         });
         t.start(0);
         let ev = t.tick(1_000).unwrap();
@@ -455,6 +465,7 @@ mod tests {
             long_break_ms: 20 * MIN,
             long_break_every: 3,
             auto_start_next: true,
+            daily_goal: 12,
         };
         cfg.save(&path).unwrap();
         let loaded = TimerConfig::load(&path);
@@ -476,5 +487,35 @@ mod tests {
         std::fs::write(&path, "{ not valid json !!!").unwrap();
         assert_eq!(TimerConfig::load(&path), TimerConfig::default());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 08-16：旧 config.json 无 daily_goal 键 → serde(default) 补默认 8（升级路径不炸不断档）
+    #[test]
+    fn config_load_missing_daily_goal_fills_default() {
+        let dir = std::env::temp_dir().join(format!("pomodoro-cfg-nogoal-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"work_ms":1500000,"short_break_ms":300000,"long_break_ms":900000,"long_break_every":4,"auto_start_next":false}"#,
+        )
+        .unwrap();
+        let loaded = TimerConfig::load(&path);
+        assert_eq!(loaded.daily_goal, 8);
+        assert_eq!(loaded.work_ms, 25 * MIN);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 08-16：snapshot 下发 daily_goal 与 work_ms（周/月刻度与分钟口径目标换算的数据源）
+    #[test]
+    fn snapshot_carries_goal_and_work_ms() {
+        let mut t = default_timer();
+        let mut cfg = *t.config();
+        cfg.daily_goal = 5;
+        cfg.work_ms = 50 * MIN;
+        t.set_config(cfg);
+        let s = t.snapshot();
+        assert_eq!(s.daily_goal, 5);
+        assert_eq!(s.work_ms, 50 * MIN);
     }
 }

@@ -19,6 +19,35 @@ impl Default for Material {
     }
 }
 
+/// 三阶段自定义配色（08-16 v16）：None=跟随主题默认色；Some="#rrggbb"
+/// 前端在 documentElement 行内覆盖 --work/--break/--long 生效，Rust 只管存取与校验
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Colors {
+    pub work: Option<String>,
+    pub short_break: Option<String>,
+    pub long_break: Option<String>,
+}
+
+impl Colors {
+    /// "#rrggbb" 校验（大小写不敏感；不带 # / 长度≠7 / 非十六进制一律拒绝）
+    pub fn valid_hex(s: &str) -> bool {
+        s.len() == 7 && s.starts_with('#') && s[1..].chars().all(|c| c.is_ascii_hexdigit())
+    }
+
+    /// 逐阶段校验：任一 Some 非法则 Err（None=恢复默认，恒合法）
+    pub fn validate(&self) -> Result<(), String> {
+        for (name, c) in [("work", &self.work), ("short_break", &self.short_break), ("long_break", &self.long_break)] {
+            if let Some(c) = c {
+                if !Self::valid_hex(c) {
+                    return Err(format!("{name} 颜色须为 #rrggbb 格式"));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 /// 全局快捷键配置：enabled=false 时保留 shortcut 记忆（再开恢复）
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -53,6 +82,8 @@ pub struct AppConfig {
     pub timer: TimerConfig,
     pub material: Material,
     pub hotkey: HotkeyConfig,
+    /// 三阶段自定义配色（None=默认；serde(default) 保证旧 config.json 升级不炸）
+    pub colors: Colors,
 }
 
 impl Default for AppConfig {
@@ -61,6 +92,7 @@ impl Default for AppConfig {
             timer: TimerConfig::default(),
             material: Material::default(),
             hotkey: HotkeyConfig::default(),
+            colors: Colors::default(),
         }
     }
 }
@@ -110,14 +142,68 @@ mod tests {
                 long_break_ms: 20 * MIN,
                 long_break_every: 3,
                 auto_start_next: true,
+                daily_goal: 10,
             },
             material: Material::Classic,
             hotkey: HotkeyConfig::default(),
+            colors: Colors {
+                work: Some("#ff9500".to_string()),
+                short_break: Some("#30d158".to_string()),
+                long_break: Some("#64d2ff".to_string()),
+            },
         };
         cfg.save(&path).unwrap();
         let loaded = AppConfig::load(&path);
         assert_eq!(loaded, cfg);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 08-16 v16：旧 config.json（无 colors 键）→ 三阶段全 None（跟默认）
+    #[test]
+    fn legacy_config_without_colors_defaults_to_none() {
+        let dir = tmpdir("legacy-colors");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"work_ms": 1800000, "short_break_ms": 300000, "long_break_ms": 900000,
+                "long_break_every": 4, "auto_start_next": false, "material": "classic"}"#,
+        )
+        .unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.colors, Colors::default());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 部分自定义（只改专注色）roundtrip：None 阶段保持 None
+    #[test]
+    fn partial_colors_roundtrip() {
+        let dir = tmpdir("partial-colors");
+        let path = dir.join("config.json");
+        let cfg = AppConfig {
+            colors: Colors { work: Some("#af52de".to_string()), ..Colors::default() },
+            ..AppConfig::default()
+        };
+        cfg.save(&path).unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.colors.work.as_deref(), Some("#af52de"));
+        assert_eq!(loaded.colors.short_break, None);
+        assert_eq!(loaded.colors.long_break, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// valid_hex / validate 正反例（不带 #、短、非十六进制、大写合法）
+    #[test]
+    fn colors_validate_rules() {
+        assert!(Colors::valid_hex("#ff3b30"));
+        assert!(Colors::valid_hex("#FF3B30"));
+        assert!(!Colors::valid_hex("ff3b30")); // 缺 #
+        assert!(!Colors::valid_hex("#abc"));   // 短
+        assert!(!Colors::valid_hex("#GGGGGG")); // 非十六进制
+        assert!(!Colors::valid_hex("#ff3b300")); // 长
+        // validate：全 None / 合法 Some 通过，任一非法 Some 拒绝
+        assert!(Colors::default().validate().is_ok());
+        assert!(Colors { work: Some("#123abc".into()), ..Colors::default() }.validate().is_ok());
+        assert!(Colors { long_break: Some("red".into()), ..Colors::default() }.validate().is_err());
     }
 
     /// 旧版 config.json（v6.1 前，无 material 键）→ 材质回默认液态玻璃，计时字段原样

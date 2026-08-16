@@ -118,7 +118,7 @@
                 </span>
               </div>
             </div>
-            <div class="section-caption">循环</div>
+            <div class="section-caption">循环 · 目标</div>
             <div class="group-card">
               <div class="setting-row">
                 <span>长休间隔（个）</span>
@@ -126,6 +126,16 @@
                   <button class="step-btn" data-step="every:-1" aria-label="减少">−</button>
                   <span class="stepper-val"><input id="input-every" type="number" inputmode="numeric" min="2" max="10" value="4" /></span>
                   <button class="step-btn" data-step="every:1" aria-label="增加">+</button>
+                </span>
+              </div>
+              <!-- 08-16：每日目标（默认 8 个）——周柱/月格刻度锚点 + 周图目标虚线；分钟口径自动换算=个数×工作时长。
+                   并入循环卡不设独立节：回到 v11 布局不动点（386px < 可用 401px），免滚动免加高 -->
+              <div class="setting-row">
+                <span>每日目标（个）</span>
+                <span class="stepper">
+                  <button class="step-btn" data-step="goal:-1" aria-label="减少">−</button>
+                  <span class="stepper-val"><input id="input-goal" type="number" inputmode="numeric" min="1" max="20" value="8" /></span>
+                  <button class="step-btn" data-step="goal:1" aria-label="增加">+</button>
                 </span>
               </div>
               <div class="setting-row toggle-row">
@@ -151,6 +161,32 @@
                   <button data-material-opt="liquid_glass" class="material-opt active">液态玻璃</button>
                 </div>
               </div>
+              <!-- 08-16 v16：三阶段自定义配色；v16b 色块点击弹自绘 iOS 风色盘（方块+彩虹条+HEX），
+                   行内色号框直接输入，「默认」恢复主题默认色；None 不落 config -->
+              <div class="setting-row color-row">
+                <span>专注色</span>
+                <span class="color-ctl">
+                  <button class="color-swatch" data-color="work" aria-label="专注色色盘"></button>
+                  <input type="text" class="color-hex" data-color="work" value="#ff3b30" maxlength="7" spellcheck="false" aria-label="专注色色号">
+                  <button class="color-reset" data-color="work" title="恢复默认">默认</button>
+                </span>
+              </div>
+              <div class="setting-row color-row">
+                <span>休息色</span>
+                <span class="color-ctl">
+                  <button class="color-swatch" data-color="short_break" aria-label="休息色色盘"></button>
+                  <input type="text" class="color-hex" data-color="short_break" value="#34c759" maxlength="7" spellcheck="false" aria-label="休息色色号">
+                  <button class="color-reset" data-color="short_break" title="恢复默认">默认</button>
+                </span>
+              </div>
+              <div class="setting-row color-row">
+                <span>长休色</span>
+                <span class="color-ctl">
+                  <button class="color-swatch" data-color="long_break" aria-label="长休色色盘"></button>
+                  <input type="text" class="color-hex" data-color="long_break" value="#0a84ff" maxlength="7" spellcheck="false" aria-label="长休色色号">
+                  <button class="color-reset" data-color="long_break" title="恢复默认">默认</button>
+                </span>
+              </div>
             </div>
             <!-- v11：快捷键改键（单行分组卡无标题=既有拍板先例）；键帽点击即录，× 一键关闭 -->
             <div class="group-card">
@@ -165,6 +201,16 @@
               </div>
             </div>
           </section>
+          <!-- v16b 自绘 iOS 风色盘（抽屉内浮层）：上部饱和度×明度方块、下部彩虹色相条、
+               底部 HEX+完成；三行共用，点色块打开并锚定该阶段 -->
+          <div class="color-pop" hidden>
+            <div class="cp-sv"><div class="cp-dot"></div></div>
+            <div class="cp-hue"><div class="cp-hue-dot"></div></div>
+            <div class="cp-foot">
+              <input class="cp-hex color-hex" maxlength="7" spellcheck="false" aria-label="色号">
+              <button class="cp-done">完成</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

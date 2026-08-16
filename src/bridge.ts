@@ -11,6 +11,8 @@ export interface TimerSnapshot {
   total_ms: number;
   completed_work_count: number;
   long_break_every: number;
+  daily_goal: number;
+  work_ms: number;
 }
 
 export interface PhaseCompleted {
@@ -24,14 +26,19 @@ export type Material = "classic" | "liquid_glass";
 export interface HotkeyConfig { enabled: boolean; shortcut: string; }
 export interface HotkeyState extends HotkeyConfig { effective: string | null; }
 
+/** 三阶段自定义配色（null=跟随主题默认；"#rrggbb" 小写） */
+export interface PhaseColors { work: string | null; short_break: string | null; long_break: string | null; }
+
 export interface TimerConfig {
   work_ms: number;
   short_break_ms: number;
   long_break_ms: number;
   long_break_every: number;
   auto_start_next: boolean;
+  daily_goal: number;
   material: Material;
   hotkey: HotkeyConfig;
+  colors: PhaseColors;
 }
 
 export interface DayBar { date: string; count: number; minutes: number; }
@@ -130,7 +137,10 @@ function createMockBridge(): Bridge {
   let remaining = 12 * 60_000 + 34_000;
   let completed = 2;
   let longEvery = 4;
+  let goal = 8;
   let material: Material = "liquid_glass";
+  // v16：mock 配色内存态（默认全 null）
+  let mockColors: PhaseColors = { work: null, short_break: null, long_break: null };
   let last = Date.now();
   // v11：mock 快捷键态（本机 Ctrl+Alt+P 被占用，演示与真机同口径的降级值）
   let hotkeyEnabled = true;
@@ -139,6 +149,7 @@ function createMockBridge(): Bridge {
   const snap = (): TimerSnapshot => ({
     phase, status, remaining_ms: remaining, total_ms: durations[phase],
     completed_work_count: completed, long_break_every: longEvery,
+    daily_goal: goal, work_ms: durations.work,
   });
 
   setInterval(() => {
@@ -176,17 +187,22 @@ function createMockBridge(): Bridge {
           durations.short_break = (args?.shortBreakMin as number) * 60_000;
           durations.long_break = (args?.longBreakMin as number) * 60_000;
           longEvery = (args?.longBreakEvery as number) ?? longEvery;
+          goal = (args?.dailyGoal as number) ?? goal;
           if (status === "idle") remaining = durations[phase];
           break;
         case "get_config":
           return {
             work_ms: durations.work, short_break_ms: durations.short_break,
             long_break_ms: durations.long_break, long_break_every: longEvery,
-            auto_start_next: false, material,
+            auto_start_next: false, daily_goal: goal, material,
             hotkey: { enabled: hotkeyEnabled, shortcut: hotkeyShortcut },
+            colors: { ...mockColors },
           } satisfies TimerConfig;
         case "set_material":
           material = (args?.material as Material) ?? material;
+          break;
+        case "set_colors":
+          mockColors = { ...(args?.colors as PhaseColors) };
           break;
         case "get_hotkey":
           return { enabled: hotkeyEnabled, shortcut: hotkeyShortcut, effective: hotkeyEnabled ? hotkeyShortcut : null } satisfies HotkeyState;

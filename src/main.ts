@@ -229,10 +229,13 @@ app.addEventListener("contextmenu", (e) => {
   refreshAutostartItem(); // 勾选态跟随真实注册状态（每次开菜单现查）
 });
 
-/* 设置入口：右键菜单与托盘「设置…」共用（展开面板+滑入抽屉） */
+/* 设置入口：右键菜单与托盘「设置…」共用（展开面板+滑入抽屉）。
+   08-16 v15c：内容超高由 .drawer .settings 滚动承载（业界标准，窗口恒 467）；
+   每次打开滚动复位到顶，防上次浏览位置残留 */
 async function openSettings() {
   if (!expanded) await setExpanded(true);
   app.classList.add("drawer-open");
+  (document.querySelector(".drawer .settings") as HTMLElement).scrollTop = 0;
 }
 
 $("ctx-settings").addEventListener("click", async (e) => {
@@ -375,6 +378,14 @@ let monthCursor = { y: now0.getFullYear(), m: now0.getMonth() + 1 };
 const statVal = (b: { count: number; minutes: number }) =>
   statsUnit === "count" ? b.count : b.minutes;
 const statUnitLabel = () => (statsUnit === "count" ? "个番茄" : "分钟");
+/* 08-16：每日目标换算到当前统计口径——个数直取；分钟=个数×工作时长（snapshot 下发，不自猜输入框） */
+const goalStatVal = () => {
+  const g = snapshot?.daily_goal ?? 8;
+  return statsUnit === "count" ? g : Math.round((g * (snapshot?.work_ms ?? 25 * 60_000)) / 60000);
+};
+/* 图表 Y 上限恒留 25% 顶部空间：目标线/最高柱最高到 80%，永不贴顶。
+   （无轴设计下 nice number 无观察者，恒定 headroom 一行覆盖全部边界——含 goal 恰为整档的 case） */
+const chartCeil = (v: number) => Math.ceil(Math.max(1, v) * 1.25);
 
 async function refreshStats() {
   const sum = (await bridge.invoke("stats_summary")) as StatsSummary;
@@ -386,7 +397,15 @@ async function refreshStats() {
 
   const chart = $("week-chart");
   chart.innerHTML = "";
-  const max = Math.max(1, ...sum.week.map(statVal));
+  // 08-16：刻度锚定每日目标（Apple Books 手法）——上限 = niceCeil(max(数据最大, 目标))，
+  // 数据稀疏时唯一有数据的天不再满格、目标线必然低于顶端；虚线横贯（bottom 与基线 26px 同参照系）
+  const goalVal = goalStatVal();
+  const chartMax = chartCeil(Math.max(goalVal, ...sum.week.map(statVal)));
+  const goalLine = document.createElement("div");
+  goalLine.className = "goal-line";
+  goalLine.style.bottom = `${26 + (goalVal / chartMax) * 40}px`;
+  goalLine.title = `每日目标：${goalVal} ${statUnitLabel()}`;
+  chart.append(goalLine);
   const todayStr = new Date().toLocaleDateString("sv-SE");
   sum.week.forEach((b, i) => {
     const v = statVal(b);
@@ -398,7 +417,7 @@ async function refreshStats() {
     const bar = document.createElement("div");
     bar.className = "week-bar";
     if (v > 0) {
-      bar.style.height = `${Math.max(4, (v / max) * 40)}px`;
+      bar.style.height = `${Math.max(4, (v / chartMax) * 40)}px`;
       bar.title = `${b.date}：${v} ${statUnitLabel()}`;
     }
     track.append(bar);
@@ -420,7 +439,8 @@ async function refreshMonth() {
 
   const grid = $("month-chart");
   grid.innerHTML = "";
-  const max = Math.max(1, ...ms.days.map(statVal));
+  // 08-16：月格分档同样锚定目标（无轴无虚线，深浅=值/niceCeil(max(目标,当月最大)) 四档）
+  const chartMax = chartCeil(Math.max(goalStatVal(), ...ms.days.map(statVal)));
   const todayStr = new Date().toLocaleDateString("sv-SE");
   for (let i = 0; i < ms.first_weekday; i++) {
     const pad = document.createElement("span");
@@ -431,7 +451,7 @@ async function refreshMonth() {
     const v = statVal(b);
     const cell = document.createElement("div");
     cell.className = "month-cell" + (b.date === todayStr ? " today" : "");
-    cell.dataset.level = String(v === 0 ? 0 : Math.min(4, Math.ceil((v / max) * 4)));
+    cell.dataset.level = String(v === 0 ? 0 : Math.min(4, Math.ceil((v / chartMax) * 4)));
     cell.title = `${b.date}：${v} ${statUnitLabel()}`;
     grid.append(cell);
   });
@@ -486,9 +506,18 @@ async function loadConfig() {
   ($("input-short") as HTMLInputElement).value = String(Math.round(cfg.short_break_ms / 60000));
   ($("input-long") as HTMLInputElement).value = String(Math.round(cfg.long_break_ms / 60000));
   ($("input-every") as HTMLInputElement).value = String(cfg.long_break_every);
+  ($("input-goal") as HTMLInputElement).value = String(cfg.daily_goal);
   toggleAutoStart.setAttribute("aria-checked", String(cfg.auto_start_next));
   toggleAutoStart.classList.toggle("on", cfg.auto_start_next);
   applyMaterial(cfg.material);
+  // v16：自定义配色（null=默认），启动即行内覆盖
+  customColors = {
+    work: cfg.colors?.work ?? null,
+    short_break: cfg.colors?.short_break ?? null,
+    long_break: cfg.colors?.long_break ?? null,
+  };
+  applyColors();
+  syncColorUI();
 }
 
 /* 材质（经典/液态玻璃）：切换即生效并持久化到 config.json */
@@ -499,12 +528,276 @@ function applyMaterial(material: string) {
   );
 }
 
+/* ---------- v16 三阶段自定义配色：行内覆盖 CSS 变量，null=跟随主题默认 ---------- */
+type ColorKey = "work" | "short_break" | "long_break";
+const COLOR_VAR: Record<ColorKey, string> = { work: "--work", short_break: "--break", long_break: "--long" };
+let customColors: Record<ColorKey, string | null> = { work: null, short_break: null, long_break: null };
+let colorErrTimer = 0;
+
+function applyColors() {
+  const root = document.documentElement;
+  const dark = root.dataset.theme === "dark";
+  (Object.keys(COLOR_VAR) as ColorKey[]).forEach((k) => {
+    const c = customColors[k];
+    if (c) {
+      root.style.setProperty(COLOR_VAR[k], c);
+      // 浅色文字需深一号（v8③ 既有纪律）：82% 混黑派生；深色同 fill
+      if (k === "work") root.style.setProperty("--work-text", dark ? c : `color-mix(in srgb, ${c} 82%, black)`);
+    } else {
+      root.style.removeProperty(COLOR_VAR[k]);
+      if (k === "work") root.style.removeProperty("--work-text");
+    }
+  });
+}
+
+/* UI 对表：色块（button 背景）/色号框显示生效色（默认态取 computed 真值——深色主题默认色与浅色不同） */
+function syncColorUI() {
+  const root = document.documentElement;
+  document.querySelectorAll<HTMLElement>("[data-color]").forEach((el) => {
+    const k = el.dataset.color as ColorKey;
+    const shown =
+      customColors[k] ?? getComputedStyle(root).getPropertyValue(COLOR_VAR[k]).trim();
+    if (el instanceof HTMLInputElement) el.value = shown;
+    else el.style.background = shown;
+  });
+  document.querySelectorAll<HTMLButtonElement>(".color-reset").forEach((b) => {
+    b.classList.toggle("default", customColors[b.dataset.color as ColorKey] === null);
+  });
+}
+
+function persistColors() {
+  bridge.invoke("set_colors", { colors: { ...customColors } });
+}
+
+/* ---------- v16b 自绘 iOS 风色盘浮层（方块+彩虹条；替换丑的 Windows 系统色盘） ---------- */
+function hsvToHex(h: number, s: number, v: number): string {
+  const f = (n: number) => {
+    const k = (n + h / 60) % 6;
+    const c = v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, "0");
+  };
+  return `#${f(5)}${f(3)}${f(1)}`;
+}
+function hexToHsv(hex: string): { h: number; s: number; v: number } {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0;
+  if (d > 0) {
+    if (max === r) h = 60 * (((g - b) / d) % 6);
+    else if (max === g) h = 60 * ((b - r) / d + 2);
+    else h = 60 * ((r - g) / d + 4);
+  }
+  if (h < 0) h += 360;
+  return { h, s: max === 0 ? 0 : d / max, v: max };
+}
+
+const colorPop = document.querySelector<HTMLElement>(".color-pop")!;
+const cpSv = colorPop.querySelector<HTMLElement>(".cp-sv")!;
+const cpDot = colorPop.querySelector<HTMLElement>(".cp-dot")!;
+const cpHue = colorPop.querySelector<HTMLElement>(".cp-hue")!;
+const cpHueDot = colorPop.querySelector<HTMLElement>(".cp-hue-dot")!;
+const cpHex = colorPop.querySelector<HTMLInputElement>(".cp-hex")!;
+let cpKey: ColorKey | null = null;
+let cpH = 0, cpS = 1, cpV = 1;
+/* v16c：拖拽中标志——悬停跟手处理器据此让位（拖拽由 window 级监听全权驱动） */
+let cpDragging = false;
+
+const currentCpHex = () => hsvToHex(cpH, cpS, cpV);
+
+function renderColorPop() {
+  colorPop.style.setProperty("--cp-h", String(Math.round(cpH)));
+  colorPop.style.setProperty("--cp-color", currentCpHex());
+  cpDot.style.left = `${cpS * 100}%`;
+  cpDot.style.top = `${(1 - cpV) * 100}%`;
+  cpHueDot.style.left = `${(cpH / 360) * 100}%`;
+  cpHex.value = currentCpHex();
+}
+
+/* 拖动即时生效：全 UI 同步换色（直控取色器的核心手感） */
+function applyFromPicker() {
+  if (!cpKey) return;
+  customColors[cpKey] = currentCpHex();
+  applyColors();
+  syncColorUI();
+  renderColorPop();
+}
+
+function openColorPop(k: ColorKey) {
+  cpKey = k;
+  const hex =
+    customColors[k] ?? getComputedStyle(document.documentElement).getPropertyValue(COLOR_VAR[k]).trim();
+  ({ h: cpH, s: cpS, v: cpV } = hexToHsv(hex));
+  colorPop.hidden = false;
+  renderColorPop();
+}
+
+function closeColorPop() {
+  if (!cpKey) return;
+  cpKey = null;
+  colorPop.hidden = true;
+  persistColors(); // 关闭时兜底落盘（拖完/hex 提交时已各落一次，幂等）
+}
+
+/* SV 方块拖拽：x=饱和度、y=1-明度；按下即选色（iOS 手感），拖完落盘一次。
+   move/up 挂 window 级——不依赖 setPointerCapture（WebView2 对真实指针可能抛 InvalidPointerId
+   炸掉整个 handler，08-16 用户实测拖不动），指针跑出方块/彩虹条也持续跟踪 */
+cpSv.addEventListener("pointerdown", (e) => {
+  if (!cpKey) return;
+  e.preventDefault();
+  cpDragging = true;
+  try { cpSv.setPointerCapture(e.pointerId); } catch {}
+  const move = (ev: PointerEvent) => {
+    const r = cpSv.getBoundingClientRect();
+    cpS = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
+    cpV = 1 - Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height));
+    applyFromPicker();
+  };
+  const up = () => {
+    cpDragging = false;
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    persistColors();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+  move(e);
+});
+
+/* 彩虹条拖拽：x=色相 0-360°，SV 方块底色随 --cp-h 即时换（同 window 级监听） */
+cpHue.addEventListener("pointerdown", (e) => {
+  if (!cpKey) return;
+  e.preventDefault();
+  cpDragging = true;
+  try { cpHue.setPointerCapture(e.pointerId); } catch {}
+  const move = (ev: PointerEvent) => {
+    const r = cpHue.getBoundingClientRect();
+    cpH = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * 360;
+    applyFromPicker();
+  };
+  const up = () => {
+    cpDragging = false;
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
+    persistColors();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
+  window.addEventListener("pointercancel", up);
+  move(e);
+});
+
+/* v16c 悬停跟手：cursor:none 后圆环=指针。悬停时圆环贴光标并预览其下颜色（不提交任何状态），
+   离开控件回弹到已选位置/已选色（renderColorPop 重算） */
+cpSv.addEventListener("pointermove", (e) => {
+  if (!cpKey || cpDragging) return;
+  const r = cpSv.getBoundingClientRect();
+  const hs = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+  const hv = 1 - Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
+  cpDot.style.left = `${hs * 100}%`;
+  cpDot.style.top = `${(1 - hv) * 100}%`;
+  colorPop.style.setProperty("--cp-color", hsvToHex(cpH, hs, hv));
+});
+cpSv.addEventListener("pointerleave", () => { if (cpKey && !cpDragging) renderColorPop(); });
+
+cpHue.addEventListener("pointermove", (e) => {
+  if (!cpKey || cpDragging) return;
+  const r = cpHue.getBoundingClientRect();
+  const hh = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 360;
+  cpHueDot.style.left = `${(hh / 360) * 100}%`;
+  colorPop.style.setProperty("--cp-color", hsvToHex(hh, cpS, cpV));
+});
+cpHue.addEventListener("pointerleave", () => { if (cpKey && !cpDragging) renderColorPop(); });
+
+/* 浮层内 hex 框：合法→HSV 状态同步（dot/条回位）；非法→闪红回退 */
+cpHex.addEventListener("change", () => {
+  const v = cpHex.value.trim().toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(v)) {
+    ({ h: cpH, s: cpS, v: cpV } = hexToHsv(v));
+    applyFromPicker();
+    persistColors();
+  } else {
+    cpHex.classList.add("error");
+    window.clearTimeout(colorErrTimer);
+    colorErrTimer = window.setTimeout(() => {
+      cpHex.classList.remove("error");
+      renderColorPop();
+    }, 1500);
+  }
+});
+
+colorPop.querySelector<HTMLButtonElement>(".cp-done")!.addEventListener("click", (e) => {
+  e.stopPropagation();
+  closeColorPop();
+});
+
+/* 色块点击=打开浮层（已开则切换编辑对象，浮层不关） */
+document.querySelectorAll<HTMLButtonElement>(".color-swatch").forEach((b) => {
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openColorPop(b.dataset.color as ColorKey);
+  });
+});
+
+/* 点外关闭：抽屉内 pointerdown（capture）——浮层自身与色块之外的区域 */
+document.querySelector(".drawer")!.addEventListener("pointerdown", (e) => {
+  if (!cpKey) return;
+  const t = e.target as HTMLElement;
+  if (!colorPop.contains(t) && !t.closest(".color-swatch")) closeColorPop();
+}, true);
+
+/* Esc 只关浮层不整收面板（capture 拦截，同快捷键录制手法） */
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && cpKey) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    closeColorPop();
+  }
+}, true);
+
+document.querySelectorAll<HTMLInputElement>(".color-hex").forEach((input) => {
+  input.addEventListener("change", () => {
+    const k = input.dataset.color as ColorKey;
+    const v = input.value.trim().toLowerCase();
+    if (/^#[0-9a-f]{6}$/.test(v)) {
+      input.value = v;
+      customColors[k] = v;
+      applyColors();
+      syncColorUI();
+      persistColors();
+    } else {
+      // 非法色号：保留所输文字 + 闪红提示，1.5s 后回退生效色
+      input.classList.add("error");
+      window.clearTimeout(colorErrTimer);
+      colorErrTimer = window.setTimeout(() => {
+        input.classList.remove("error");
+        syncColorUI();
+      }, 1500);
+    }
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>(".color-reset").forEach((b) => {
+  b.addEventListener("click", (e) => {
+    e.stopPropagation();
+    customColors[b.dataset.color as ColorKey] = null;
+    applyColors();
+    syncColorUI();
+    persistColors();
+  });
+});
+
 /* 步进器/输入框的范围表：which → [inputId, min, max] */
 const STEP_RANGE: Record<string, [string, number, number]> = {
   work: ["input-work", 1, 120],
   short: ["input-short", 1, 60],
   long: ["input-long", 1, 60],
   every: ["input-every", 2, 10],
+  goal: ["input-goal", 1, 20],
 };
 
 function readStep(which: string): number {
@@ -522,8 +815,12 @@ async function applyConfig() {
     longBreakMin: readStep("long"),
     longBreakEvery: readStep("every"),
     autoStartNext: toggleAutoStart.getAttribute("aria-checked") === "true",
+    dailyGoal: readStep("goal"),
   });
   render((await bridge.invoke("timer_snapshot")) as TimerSnapshot);
+  // 08-16：目标/时长变更会改变周柱刻度与目标虚线（分钟口径换算），统计图须跟着重刷
+  await refreshStats();
+  if (statsRange === "month") await refreshMonth();
 }
 
 toggleAutoStart.addEventListener("click", (e) => {
@@ -615,6 +912,7 @@ $("input-work").addEventListener("change", applyConfig);
 $("input-short").addEventListener("change", applyConfig);
 $("input-long").addEventListener("change", applyConfig);
 $("input-every").addEventListener("change", applyConfig);
+$("input-goal").addEventListener("change", applyConfig);
 
 /* 步进器 */
 document.querySelectorAll<HTMLButtonElement>(".step-btn").forEach((btn) => {
@@ -633,6 +931,9 @@ document.querySelectorAll<HTMLButtonElement>(".theme-opt").forEach((btn) => {
   btn.addEventListener("click", () => {
     const theme = btn.dataset.themeOpt!;
     document.documentElement.dataset.theme = theme;
+    // v16：work-text 派生随主题变（浅=82% 混黑 / 深=原色），换肤即重算
+    applyColors();
+    syncColorUI();
     document.querySelectorAll(".theme-opt").forEach((b) => b.classList.toggle("active", b === btn));
     // v11：托盘自绘菜单页跟随换肤（广播给所有窗口，托盘页 load/打开时也会 query 兜底）
     bridge.emit("ui-style", { theme: document.documentElement.dataset.theme, material: document.documentElement.dataset.material });

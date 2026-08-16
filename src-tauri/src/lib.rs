@@ -35,6 +35,8 @@ struct AppState {
     material: Mutex<Material>,
     /// 配置的全局快捷键（config.json 持久化）
     hotkey: Mutex<appconfig::HotkeyConfig>,
+    /// 三阶段自定义配色（config.json 持久化；None=默认）
+    colors: Mutex<appconfig::Colors>,
     /// 实际注册生效的快捷键字符串（注册失败/关闭时为 None；可能≠配置值——启动降级）
     hotkey_effective: Mutex<Option<String>>,
 }
@@ -120,6 +122,7 @@ fn set_config(
     long_break_min: u64,
     long_break_every: u32,
     auto_start_next: bool,
+    daily_goal: u32,
 ) {
     {
         let mut t = state.timer.lock().unwrap();
@@ -130,6 +133,8 @@ fn set_config(
         // every=0 会在 next_phase_after 取模 panic，下限钳 1
         cfg.long_break_every = long_break_every.max(1);
         cfg.auto_start_next = auto_start_next;
+        // 目标刻度锚点：0 会让周/月图退化回纯相对刻度，钳 1–20（与前端步进器范围一致）
+        cfg.daily_goal = daily_goal.clamp(1, 20);
         t.set_config(cfg);
     } // 先放锁再组 AppConfig（current_appconfig 内部要锁 timer，防自死锁）
     let _ = current_appconfig(&state).save(&config_path());
@@ -147,6 +152,16 @@ fn set_material(state: State<AppState>, material: Material) {
     let _ = current_appconfig(&state).save(&config_path());
 }
 
+/// 三阶段自定义配色（08-16 v16）：同 set_material 模式——只动 UI 不动计时；
+/// 前端已先行校验，这里再验一道防绕过（非法 hex 不落盘不生效）
+#[tauri::command]
+fn set_colors(state: State<AppState>, colors: appconfig::Colors) -> Result<(), String> {
+    colors.validate()?;
+    *state.colors.lock().unwrap() = colors;
+    let _ = current_appconfig(&state).save(&config_path());
+    Ok(())
+}
+
 #[derive(Clone, serde::Serialize)]
 struct HotkeyState {
     enabled: bool,
@@ -160,6 +175,7 @@ fn current_appconfig(state: &AppState) -> AppConfig {
         timer: *state.timer.lock().unwrap().config(),
         material: *state.material.lock().unwrap(),
         hotkey: state.hotkey.lock().unwrap().clone(),
+        colors: state.colors.lock().unwrap().clone(),
     }
 }
 
@@ -631,6 +647,7 @@ pub fn run() {
                 stats: Mutex::new(stats),
                 material: Mutex::new(appcfg.material),
                 hotkey: Mutex::new(appcfg.hotkey.clone()),
+                colors: Mutex::new(appcfg.colors),
                 hotkey_effective: Mutex::new(None),
             });
 
@@ -781,6 +798,7 @@ pub fn run() {
             set_config,
             get_config,
             set_material,
+            set_colors,
             get_hotkey,
             set_hotkey,
             stats_summary,
