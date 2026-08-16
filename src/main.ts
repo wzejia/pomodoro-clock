@@ -287,8 +287,13 @@ bridge.onEvent("tray-menu-closed", () => {
    展开：窗口先到位（Rust 防出屏钳制），卡片从旧位置连续生长；
    收起：窗口保持大，卡片先收缩到位，再 morph_commit 落窗（不可见瞬切）。 */
 const RADIUS_PANEL = 22, RADIUS_MINI = 38; // 76/2，视觉等同 999px 胶囊
-const MORPH_MS = 340;
-const MORPH_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
+/* v17c 动效基线（用户拍板：取消全部回弹、尾部要缓）：
+   - 展开 340ms / 收起 280ms（展开承载内容多给尾部减速空间）
+   - 统一缓动 y2=1 → 末端斜率 0：真正减速「滑到停」，而非 ease-out 残速「冲到停」；
+     过冲曲线（v17）使尾部同时做回落+收角+数字落位三件事，是「完全展开前几帧变化快」根因，已全面回撤 */
+const MORPH_MS_EXPAND = 340;
+const MORPH_MS_COLLAPSE = 280;
+const MORPH_EASE = "cubic-bezier(0.37, 0.68, 0.2, 1)";
 
 let morphGen = 0;
 let morphAnim: Animation | null = null;
@@ -313,6 +318,28 @@ function settleCard(w: number, h: number) {
   morphAnim = null;
 }
 
+/* v17 时间数字连续形变（FLIP）：panelTime 从胶囊数字的位置/字号连续长成面板大数字（展开），
+   或缩回胶囊位（收起）。两元素绝对定布局、rect 与 .app 当前动画尺寸无关，随时可量。
+   fill none：结束即回自然态，无残留；打断时 cancel 后由下一次调用重算。 */
+let timeFlipAnim: Animation | null = null;
+function animateTimeFlip(expand: boolean) {
+  timeFlipAnim?.cancel();
+  timeFlipAnim = null;
+  const pr = pillTime.getBoundingClientRect();
+  const qr = panelTime.getBoundingClientRect();
+  if (!pr.width || !qr.width) return;
+  const scale = pr.width / qr.width;
+  const dx = (pr.left + pr.width / 2) - (qr.left + qr.width / 2);
+  const dy = (pr.top + pr.height / 2) - (qr.top + qr.height / 2);
+  const pillTf = `translate(${dx}px, ${dy}px) scale(${scale.toFixed(4)})`;
+  timeFlipAnim = panelTime.animate(
+    expand
+      ? [{ transform: pillTf }, { transform: "none" }]
+      : [{ transform: "none" }, { transform: pillTf }],
+    { duration: expand ? MORPH_MS_EXPAND : MORPH_MS_COLLAPSE, easing: MORPH_EASE, fill: "none" },
+  );
+}
+
 async function setExpanded(v: boolean) {
   if (expanded === v) return;
   expanded = v;
@@ -331,15 +358,17 @@ async function setExpanded(v: boolean) {
     app.classList.toggle("expanded", true);
     app.classList.toggle("mini", false);
     // 从静止起步：卡片锚在旧屏幕位置（窗口可能被钳制移动了 dx,dy）；
-    // 打断反转：从当前帧的 transform 连续接管
+    // 打断反转：从当前帧的 transform 连续接管。
+    // 圆角随主曲线连续过渡（v17c：独立保持-收束轨道已撤——尾部收角突兀是用户反馈点）
     const fromT = wasAnimating ? from.t : `translate(${dx}px, ${dy}px)`;
     morphAnim = app.animate(
       [
         { width: from.w, height: from.h, borderRadius: from.r, transform: fromT },
         { width: `${to.w}px`, height: `${to.h}px`, borderRadius: `${to.r}px`, transform: "translate(0px, 0px)" },
       ],
-      { duration: MORPH_MS, easing: MORPH_EASE, fill: "forwards" },
+      { duration: MORPH_MS_EXPAND, easing: MORPH_EASE, fill: "forwards" },
     );
+    animateTimeFlip(true);
     try { await morphAnim.finished; } catch { return; }
     if (gen !== morphGen) return;
     settleCard(to.w, to.h);
@@ -352,8 +381,9 @@ async function setExpanded(v: boolean) {
         { width: from.w, height: from.h, borderRadius: from.r, transform: from.t },
         { width: `${to.w}px`, height: `${to.h}px`, borderRadius: `${to.r}px`, transform: "translate(0px, 0px)" },
       ],
-      { duration: MORPH_MS, easing: MORPH_EASE, fill: "forwards" },
+      { duration: MORPH_MS_COLLAPSE, easing: MORPH_EASE, fill: "forwards" },
     );
+    animateTimeFlip(false);
     try { await morphAnim.finished; } catch { return; }
     if (gen !== morphGen) return;
     await bridge.morphCommit(MINI_W, MINI_H);
@@ -510,11 +540,14 @@ async function loadConfig() {
   toggleAutoStart.setAttribute("aria-checked", String(cfg.auto_start_next));
   toggleAutoStart.classList.toggle("on", cfg.auto_start_next);
   applyMaterial(cfg.material);
-  // v16：自定义配色（null=默认），启动即行内覆盖
+  // v16：自定义配色（null=默认），启动即行内覆盖；评审 P3 修：手改 config 塞非法色
+  // （如 "red"）在此滤成 null，防 hexToHsv NaN 链（dot NaN% / 拖拽产出非法态被 Rust 拒写）
+  const safeHex = (s: string | null | undefined) =>
+    s && /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : null;
   customColors = {
-    work: cfg.colors?.work ?? null,
-    short_break: cfg.colors?.short_break ?? null,
-    long_break: cfg.colors?.long_break ?? null,
+    work: safeHex(cfg.colors?.work),
+    short_break: safeHex(cfg.colors?.short_break),
+    long_break: safeHex(cfg.colors?.long_break),
   };
   applyColors();
   syncColorUI();
@@ -550,15 +583,18 @@ function applyColors() {
   });
 }
 
-/* UI 对表：色块（button 背景）/色号框显示生效色（默认态取 computed 真值——深色主题默认色与浅色不同） */
+/* UI 对表：色块（button 背景）/色号框显示生效色（默认态取 computed 真值——深色主题默认色与浅色不同）。
+   评审 P1 修：选择器收紧到 .color-hex[data-color]/.color-swatch——泛匹配 [data-color] 会把
+   「默认」按钮也行内涂上阶段色，压死 CSS 的 transparent 背景与 hover 反馈 */
 function syncColorUI() {
   const root = document.documentElement;
-  document.querySelectorAll<HTMLElement>("[data-color]").forEach((el) => {
-    const k = el.dataset.color as ColorKey;
-    const shown =
-      customColors[k] ?? getComputedStyle(root).getPropertyValue(COLOR_VAR[k]).trim();
-    if (el instanceof HTMLInputElement) el.value = shown;
-    else el.style.background = shown;
+  const shownOf = (k: ColorKey) =>
+    customColors[k] ?? getComputedStyle(root).getPropertyValue(COLOR_VAR[k]).trim();
+  document.querySelectorAll<HTMLInputElement>(".color-hex[data-color]").forEach((el) => {
+    el.value = shownOf(el.dataset.color as ColorKey);
+  });
+  document.querySelectorAll<HTMLElement>(".color-swatch").forEach((el) => {
+    el.style.background = shownOf(el.dataset.color as ColorKey);
   });
   document.querySelectorAll<HTMLButtonElement>(".color-reset").forEach((b) => {
     b.classList.toggle("default", customColors[b.dataset.color as ColorKey] === null);
@@ -608,7 +644,9 @@ const currentCpHex = () => hsvToHex(cpH, cpS, cpV);
 
 function renderColorPop() {
   colorPop.style.setProperty("--cp-h", String(Math.round(cpH)));
-  colorPop.style.setProperty("--cp-color", currentCpHex());
+  /* 评审 P3 修：两环颜色变量分家——悬停预览只写自己那个，另一环不跟闪 */
+  colorPop.style.setProperty("--cp-sv-color", currentCpHex());
+  colorPop.style.setProperty("--cp-hue-color", currentCpHex());
   cpDot.style.left = `${cpS * 100}%`;
   cpDot.style.top = `${(1 - cpV) * 100}%`;
   cpHueDot.style.left = `${(cpH / 360) * 100}%`;
@@ -649,6 +687,9 @@ cpSv.addEventListener("pointerdown", (e) => {
   cpDragging = true;
   try { cpSv.setPointerCapture(e.pointerId); } catch {}
   const move = (ev: PointerEvent) => {
+    /* 评审 P1 修（幽灵拖拽自愈）：窗外松手时无 capture 即无 pointerup，监听器会残留——
+       buttons=0 的 move 说明键已松，就地收摊 */
+    if (ev.buttons === 0) { up(); return; }
     const r = cpSv.getBoundingClientRect();
     cpS = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width));
     cpV = 1 - Math.max(0, Math.min(1, (ev.clientY - r.top) / r.height));
@@ -674,6 +715,7 @@ cpHue.addEventListener("pointerdown", (e) => {
   cpDragging = true;
   try { cpHue.setPointerCapture(e.pointerId); } catch {}
   const move = (ev: PointerEvent) => {
+    if (ev.buttons === 0) { up(); return; } // 同上：窗外松手自愈
     const r = cpHue.getBoundingClientRect();
     cpH = Math.max(0, Math.min(1, (ev.clientX - r.left) / r.width)) * 360;
     applyFromPicker();
@@ -700,7 +742,7 @@ cpSv.addEventListener("pointermove", (e) => {
   const hv = 1 - Math.max(0, Math.min(1, (e.clientY - r.top) / r.height));
   cpDot.style.left = `${hs * 100}%`;
   cpDot.style.top = `${(1 - hv) * 100}%`;
-  colorPop.style.setProperty("--cp-color", hsvToHex(cpH, hs, hv));
+  colorPop.style.setProperty("--cp-sv-color", hsvToHex(cpH, hs, hv));
 });
 cpSv.addEventListener("pointerleave", () => { if (cpKey && !cpDragging) renderColorPop(); });
 
@@ -709,7 +751,7 @@ cpHue.addEventListener("pointermove", (e) => {
   const r = cpHue.getBoundingClientRect();
   const hh = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 360;
   cpHueDot.style.left = `${(hh / 360) * 100}%`;
-  colorPop.style.setProperty("--cp-color", hsvToHex(hh, cpS, cpV));
+  colorPop.style.setProperty("--cp-hue-color", hsvToHex(hh, cpS, cpV));
 });
 cpHue.addEventListener("pointerleave", () => { if (cpKey && !cpDragging) renderColorPop(); });
 

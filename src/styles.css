@@ -43,6 +43,8 @@
   --radius-card: 14px;
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --spring-gentle: cubic-bezier(0.25, 1, 0.5, 1);
+  /* v17c 动效基线：抽屉 280ms；全部回弹取消（--spring-pop 已删，用户拍板） */
+  --dur-morph: 280ms;
 }
 
 [data-theme="dark"] {
@@ -121,13 +123,13 @@ html, body {
   /* v8⑬：左右 inset 统一 16px（原 18/14 光学留白不对称，计时区偏左 2px） */
   padding: 0 16px;
   cursor: default;
-  /* 交叉淡入淡出：收起时延迟淡入（等卡片收缩近半） */
+  /* 交叉淡入淡出：收起时延迟淡入（等卡片收缩近半）；v17 随 280ms 基线同步收窄 */
   opacity: 1;
   visibility: visible;
-  transition: opacity 0.22s ease-out 0.16s, visibility 0s;
+  transition: opacity 0.18s ease-out 0.13s, visibility 0s;
 }
 .app.expanded .pill {
-  /* 展开时快速淡出（旧内容先走） */
+  /* 展开时快速淡出（旧内容先走）；v17c 与 340ms 主曲线同步放缓 */
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -235,14 +237,15 @@ html, body {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.12s ease-out, visibility 0s 0.12s;
+  transition: opacity 0.1s ease-out, visibility 0s 0.1s;
 }
 .app.expanded .panel {
-  /* 展开时延迟淡入（新内容后到，灵动岛节奏） */
+  /* 展开时延迟淡入（新内容后到；时间数字另有 FLIP 连续形变叠加）。
+     v17c：0.24s/0.12s 与 340ms 主曲线同呼吸——淡入不再中途完成显得突兀 */
   opacity: 1;
   visibility: visible;
   pointer-events: auto;
-  transition: opacity 0.22s ease-out 0.12s, visibility 0s;
+  transition: opacity 0.24s ease-out 0.12s, visibility 0s;
 }
 
 .panel-head { text-align: center; cursor: grab; position: relative; }
@@ -746,6 +749,12 @@ html, body {
 /* 「完成」/点外关闭的 hidden 失效坑：.color-pop 的 display:flex 同权重盖掉 UA [hidden]
    （.week-chart[hidden] 同款教训，显式补刀） */
 .color-pop[hidden] { display: none; }
+/* v17：色盘入场（替换瞬现）；v17c 微过冲取消。注意基态 transform 是
+   translate(-50%,-50%)，keyframe 必须带着，否则入场跳位 */
+.color-pop:not([hidden]) { animation: cp-pop 0.22s var(--spring); }
+@keyframes cp-pop {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
+}
 /* SV 方块：底=当前色相纯色，上叠白→透明（横向）与黑→透明（纵向）双层渐变；
    色相由 --cp-h 变量驱动（拖彩虹条即时换底色）。v9 纪律：无 transform 动画 */
 /* v16c：cursor none——系统光标在控件上消失，圆环（cp-dot/cp-hue-dot）接管指针（悬停跟手，JS 驱动） */
@@ -769,18 +778,20 @@ html, body {
     #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%,
     #0000ff 67%, #ff00ff 83%, #ff0000 100%);
 }
-/* 旋钮：白描边圆点（shadow 配方同 .toggle-knob，压在任意底色上都可辨） */
+/* 旋钮：白描边圆点（shadow 配方同 .toggle-knob，压在任意底色上都可辨）。
+   评审 P3 修：两环颜色变量分家（--cp-sv-color/--cp-hue-color），悬停预览互不跟闪 */
 .cp-dot, .cp-hue-dot {
   position: absolute;
   width: 14px;
   height: 14px;
   border-radius: 50%;
   border: 2px solid #fff;
-  background: var(--cp-color, transparent);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
   transform: translate(-50%, -50%);
   pointer-events: none;
 }
+.cp-dot { background: var(--cp-sv-color, transparent); }
+.cp-hue-dot { background: var(--cp-hue-color, transparent); }
 /* v16c：彩虹条圆环垂直居中——此前 top 为 auto 贴条顶，视觉悬在条上方 */
 .cp-hue-dot { top: 50%; }
 .cp-foot { display: flex; align-items: center; gap: 8px; }
@@ -792,7 +803,8 @@ html, body {
   font-family: var(--font);
   font-size: 13px;
   font-weight: 600;
-  background: var(--work);
+  /* 评审 P3 修：跟随当前编辑的阶段色（而非恒专注红）——悬停预览时同步变色 */
+  background: var(--cp-hue-color, var(--work));
   color: #fff;
   cursor: pointer;
   flex-shrink: 0;
@@ -859,7 +871,8 @@ html, body {
   opacity: 1;
   visibility: visible;
   transform: scale(1);
-  transition: opacity 0.15s ease-out, transform 0.18s var(--spring), visibility 0s;
+  /* v17c：回弹全部取消，入场回到无过冲弹簧 */
+  transition: opacity 0.15s ease-out, transform 0.2s var(--spring), visibility 0s;
 }
 .ctx-item {
   display: block;
@@ -900,7 +913,8 @@ html, body {
   transform: translateX(100%);
   opacity: 0;
   pointer-events: none;
-  transition: transform 0.35s var(--spring), opacity 0.2s ease;
+  /* v17：与主 morph 同 280ms 同弹簧（全套节奏统一） */
+  transition: transform var(--dur-morph) var(--spring), opacity 0.16s ease;
   z-index: 20;
 }
 .app.drawer-open .drawer {
