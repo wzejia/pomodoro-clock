@@ -24,7 +24,7 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/.webview2-data/**", "**/node_modules/**"],
     },
   },
   // v11 托盘自绘菜单页：多页入口（dev 按需直出，build 产物需要显式声明）
