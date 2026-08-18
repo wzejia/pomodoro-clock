@@ -35,7 +35,7 @@
 |:---:|:---:|
 | ![面板与菜单浅色](assets/panel-menu-light.png) | ![设置抽屉](assets/settings-drawer.png) |
 
-| 月历热力图 | 自绘 iOS 色盘 |
+| 月历热力图 | 色盘 |
 |:---:|:---:|
 | ![月历热力图](assets/calendar-month.png) | ![iOS 色盘](assets/color-picker.png) |
 
