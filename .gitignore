@@ -30,6 +30,7 @@ src-tauri/target/
 memory/
 .claude/
 .playwright-mcp/
+.webview2-data/
 
 # Dev-process artifacts (kept locally, excluded from repo)
 docs/
