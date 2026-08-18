@@ -101,7 +101,11 @@ impl AppConfig {
     /// 与 TimerConfig::load 同策略：文件缺失/损坏回默认（不崩），缺字段补默认
     pub fn load(path: &std::path::Path) -> Self {
         match std::fs::read_to_string(path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            // 08-18 P2-2：单字段类型错会整份回默认——至少留日志，用户配置"消失"可追溯
+            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
+                eprintln!("[config] 应用配置解析失败，回默认（{e}）");
+                Self::default()
+            }),
             Err(_) => Self::default(),
         }
     }
@@ -113,7 +117,10 @@ impl AppConfig {
             }
         }
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(self).unwrap())?;
+        // 08-18 P2：序列化失败转 io::Error 走 ?，不在 save 路径 panic
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
     }

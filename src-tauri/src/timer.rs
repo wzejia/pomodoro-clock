@@ -59,7 +59,16 @@ impl TimerConfig {
     /// 从文件加载；文件不存在或损坏时返回默认配置（不崩），缺字段补默认值
     pub fn load(path: &std::path::Path) -> Self {
         match std::fs::read_to_string(path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+            // 08-18 R1：手改 config 写 long_break_every=0 会令取模除零——load 钳回 ≥1
+            //（set_config 命令层已有 .max(1)，此为绕过 UI 直改文件时的第二道闸）
+            Ok(s) => {
+                let mut cfg = serde_json::from_str::<Self>(&s).unwrap_or_else(|e| {
+                    eprintln!("[config] 计时配置解析失败，回默认（{e}）");
+                    Self::default()
+                });
+                cfg.long_break_every = cfg.long_break_every.max(1);
+                cfg
+            }
             Err(_) => Self::default(),
         }
     }
@@ -71,7 +80,10 @@ impl TimerConfig {
             }
         }
         let tmp = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(self).unwrap())?;
+        // 08-18 P2：序列化失败转 io::Error 走 ?，不在 save 路径 panic
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -241,7 +253,8 @@ impl Timer {
     fn next_phase_after(&self, from: Phase, completed: bool) -> Phase {
         match from {
             Phase::Work => {
-                if completed && self.completed_work_count % self.config.long_break_every == 0 {
+                // 08-18 R1 用点兜底：max(1) 防 0 除零 panic（load/set_config 之外的最后一道闸）
+                if completed && self.completed_work_count % self.config.long_break_every.max(1) == 0 {
                     Phase::LongBreak
                 } else {
                     Phase::ShortBreak
@@ -517,5 +530,34 @@ mod tests {
         let s = t.snapshot();
         assert_eq!(s.daily_goal, 5);
         assert_eq!(s.work_ms, 50 * MIN);
+    }
+
+    /// 08-18 审计 R1：手改 config.json 写 long_break_every=0 → load 须钳回 ≥1，
+    /// 且取模用点不得 panic（0 会除零炸 tick 线程）
+    #[test]
+    fn load_clamps_long_break_every_zero() {
+        let dir = std::env::temp_dir().join(format!("pomodoro-cfg-zeroevery-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"work_ms":1000,"short_break_ms":500,"long_break_ms":2000,"long_break_every":0,"auto_start_next":true}"#,
+        )
+        .unwrap();
+        let loaded = TimerConfig::load(&path);
+        assert!(loaded.long_break_every >= 1, "load 必须把 0 钳回 ≥1，实际 {}", loaded.long_break_every);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 08-18 审计 R1 用点兜底：即使 config 被构造为 0，next_phase_after 也不得 panic
+    #[test]
+    fn zero_long_break_every_does_not_panic_in_phase_transition() {
+        let mut t = default_timer();
+        let mut cfg = *t.config();
+        cfg.long_break_every = 0; // 绕过 load/set_config 两道钳制，直击用点
+        t.set_config(cfg);
+        // 跑完一个工作阶段触发 next_phase_after（0 % max(1,0) 而非除零）
+        t.start(0);
+        let _ = t.tick(cfg.work_ms);
     }
 }

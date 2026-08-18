@@ -62,7 +62,10 @@ impl StatsStore {
             }
         }
         let tmp: PathBuf = path.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(self).unwrap())?;
+        // 08-18 P2：序列化失败转 io::Error 走 ?，不在 save 路径 panic
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(&tmp, json)?;
         std::fs::rename(&tmp, path)?;
         Ok(())
     }
@@ -139,6 +142,9 @@ impl StatsStore {
     pub fn month(&self, year: i32, month: u32) -> MonthSummary {
         // 非法月份钳到 1-12（命令层不设防，调用方越界也不 panic）
         let month = month.clamp(1, 12);
+        // 08-18 P2-1：年份钳 chrono 有效域（≤262143 且给 year+1 留余量），
+        // from_ymd_opt 才恒 Some，杜绝 unwrap panic（前端传 0/负数/极端年也不炸）
+        let year = year.clamp(1, 262_142);
         let first = NaiveDate::from_ymd_opt(year, month, 1).unwrap();
         let next = if month == 12 {
             NaiveDate::from_ymd_opt(year + 1, 1, 1).unwrap()

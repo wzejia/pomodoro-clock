@@ -234,6 +234,9 @@ app.addEventListener("contextmenu", (e) => {
    每次打开滚动复位到顶，防上次浏览位置残留 */
 async function openSettings() {
   if (!expanded) await setExpanded(true);
+  // 08-18 审计 F2：展开可能被竞态整收打断（托盘设置×失焦 collapse 同时发生）——
+  // 复检通过才加 drawer-open，防抽屉滑入 220x76 迷你胶囊被裁切
+  if (!expanded) return;
   app.classList.add("drawer-open");
   (document.querySelector(".drawer .settings") as HTMLElement).scrollTop = 0;
 }
@@ -565,7 +568,17 @@ function applyMaterial(material: string) {
 type ColorKey = "work" | "short_break" | "long_break";
 const COLOR_VAR: Record<ColorKey, string> = { work: "--work", short_break: "--break", long_break: "--long" };
 let customColors: Record<ColorKey, string | null> = { work: null, short_break: null, long_break: null };
-let colorErrTimer = 0;
+/* 非法色号闪红：恢复定时器按元素独立存放（此前色盘 HEX 与抽屉色号共享一个
+   timer 互相覆盖，1.5s 内先后触发时先触发的红框态永久残留——08-18 审计 F1） */
+function flashHexError(el: HTMLElement, onRecover: () => void) {
+  el.classList.add("error");
+  const prev = (el as any).__hexErrTimer as number | undefined;
+  if (prev) window.clearTimeout(prev);
+  (el as any).__hexErrTimer = window.setTimeout(() => {
+    el.classList.remove("error");
+    onRecover();
+  }, 1500);
+}
 
 function applyColors() {
   const root = document.documentElement;
@@ -763,12 +776,7 @@ cpHex.addEventListener("change", () => {
     applyFromPicker();
     persistColors();
   } else {
-    cpHex.classList.add("error");
-    window.clearTimeout(colorErrTimer);
-    colorErrTimer = window.setTimeout(() => {
-      cpHex.classList.remove("error");
-      renderColorPop();
-    }, 1500);
+    flashHexError(cpHex, renderColorPop);
   }
 });
 
@@ -813,12 +821,7 @@ document.querySelectorAll<HTMLInputElement>(".color-hex").forEach((input) => {
       persistColors();
     } else {
       // 非法色号：保留所输文字 + 闪红提示，1.5s 后回退生效色
-      input.classList.add("error");
-      window.clearTimeout(colorErrTimer);
-      colorErrTimer = window.setTimeout(() => {
-        input.classList.remove("error");
-        syncColorUI();
-      }, 1500);
+      flashHexError(input, syncColorUI);
     }
   });
 });
@@ -998,12 +1001,18 @@ bridge.onTick(render);
 bridge.onPhaseCompleted(() => {
   playChime();
   refreshStats();
+  // 08-18 审计 F5：月历视图下完成番茄也要刷新今日格（refreshStats 只刷周模式）
+  if (statsRange === "month") refreshMonth();
 });
 
-/* 一声轻提示音：WebAudio 合成柔和高音，无需音频资源 */
+/* 一声轻提示音：WebAudio 合成柔和高音，无需音频资源。
+   08-18 审计 F6：AudioContext 模块级复用——每次新建在连续快速完成阶段时
+   会累积未关实例，可能触及浏览器上限致后续无声 */
+let chimeCtx: AudioContext | null = null;
 function playChime() {
   try {
-    const ctx = new AudioContext();
+    chimeCtx ??= new AudioContext();
+    const ctx = chimeCtx;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
@@ -1014,7 +1023,6 @@ function playChime() {
     osc.connect(gain).connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 1);
-    osc.onended = () => ctx.close();
   } catch { /* 无声可接受 */ }
 }
 

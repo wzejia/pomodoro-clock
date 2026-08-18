@@ -70,7 +70,10 @@ fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseComplet
     };
     let r = app.notification().builder().title(title).body(body).show();
     eprintln!("[notify] show result: {r:?}");
-    let _ = app.emit("phase-completed", ev);
+    // 08-18 P2-3：完成事件是前端 toast/统计刷新的唯一通知路径，emit 失败不得静默
+    if let Err(e) = app.emit("phase-completed", ev) {
+        eprintln!("[emit] phase-completed 发送失败: {e}");
+    }
 }
 
 #[tauri::command]
@@ -604,7 +607,7 @@ pub fn run() {
         }
     }));
     builder
-        .plugin(tauri_plugin_opener::init())
+        // 08-18 依赖审计：opener 前后端零调用已移除（JS 依赖/Cargo 依赖/权限一并下线）
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -771,19 +774,30 @@ pub fn run() {
                 *state.hotkey_effective.lock().unwrap() = effective;
             }
 
-            // 计时驱动线程：唯一 tick 来源，250ms 粒度
+            // 计时驱动线程：唯一 tick 来源，250ms 粒度。
+            // 08-18 R2：本线程是唯一计时驱动源，任何 panic 若炸掉线程 = 计时器无声冻结——
+            // catch_unwind 兜底记日志后继续循环；锁毒化降级取数据（好过整计时冻结）。
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(250));
-                let state = handle.state::<AppState>();
-                let (ev, snap) = {
-                    let mut t = state.timer.lock().unwrap();
-                    let ev = t.tick(now_ms());
-                    (ev, t.snapshot())
-                };
-                let _ = handle.emit("timer-tick", TickPayload { snapshot: snap });
-                if let Some(ev) = ev {
-                    on_phase_completed(&handle, &state, ev);
+                let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let state = handle.state::<AppState>();
+                    let (ev, snap) = {
+                        // 毒锁：持有期间 panic 过的 mutex——into_inner 取回数据继续用
+                        let mut t = match state.timer.lock() {
+                            Ok(g) => g,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        let ev = t.tick(now_ms());
+                        (ev, t.snapshot())
+                    };
+                    let _ = handle.emit("timer-tick", TickPayload { snapshot: snap });
+                    if let Some(ev) = ev {
+                        on_phase_completed(&handle, &state, ev);
+                    }
+                }));
+                if tick_result.is_err() {
+                    eprintln!("[tick] 计时线程一轮 panic，已兜底继续（详见上方 panic 输出）");
                 }
             });
             Ok(())
