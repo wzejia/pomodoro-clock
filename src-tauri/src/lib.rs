@@ -534,6 +534,12 @@ pub mod traymenu {
         }
     }
 
+    /// 非 Windows 没有 Win32 显示器 API。回退主屏矩形，托盘菜单仍可定位且工程能在 Linux 上编译。
+    #[cfg(not(windows))]
+    pub fn work_area_of_point(_px: i32, _py: i32) -> (i32, i32, i32, i32) {
+        (0, 0, 1920, 1080)
+    }
+
     #[cfg(test)]
     mod tests {
         use super::menu_origin;
