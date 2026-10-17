@@ -46,8 +46,10 @@
   --radius-card: 14px;
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --spring-gentle: cubic-bezier(0.25, 1, 0.5, 1);
-  /* v17c 动效基线：抽屉 280ms；全部回弹取消（--spring-pop 已删，用户拍板） */
-  --dur-morph: 280ms;
+  /* WWDC23 bounce 0 平滑弹簧采样。感知时长 0.42s，视觉落定约 0.57s，不过冲。 */
+  --ios-smooth: linear(0 0%, 0.0995 6%, 0.2864 13%, 0.472 19%, 0.6256 25%, 0.7423 31%, 0.8263 38%, 0.8848 44%, 0.9246 50%, 0.9511 56%, 0.9686 63%, 0.98 69%, 0.9873 75%, 0.992 81%, 0.995 88%, 0.9968 94%, 0.998 100%);
+  --dur-smooth: 0.57s;
+  --dur-morph: 0.45s;
 }
 
 [data-theme="dark"] {
@@ -251,26 +253,36 @@ input:focus-visible {
   opacity: 1;
   visibility: hidden;
   pointer-events: none;
-  transition: visibility 0s linear 0.28s;
+  transition: visibility 0s linear 0.5s;
 }
 .app.expanded .panel {
   visibility: visible;
   pointer-events: auto;
   transition: visibility 0s linear;
 }
-.panel > :not(.panel-head),
+.panel > :not(.panel-head):not(.drawer),
 .panel-phase,
 .progress-track,
 .cycle-dots {
   opacity: 0;
-  transition: opacity 0.1s ease-out;
 }
-.app.expanded .panel > :not(.panel-head),
+.panel > :not(.panel-head):not(.drawer) {
+  transition: opacity 0.1s var(--ios-smooth);
+}
+.panel-phase,
+.progress-track,
+.cycle-dots {
+  transition: opacity 0.12s var(--ios-smooth);
+}
+.app.expanded .panel > :not(.panel-head):not(.drawer) {
+  opacity: 1;
+  transition: opacity 0.42s var(--ios-smooth) 0.14s;
+}
 .app.expanded .panel-phase,
 .app.expanded .progress-track,
 .app.expanded .cycle-dots {
   opacity: 1;
-  transition: opacity 0.24s ease-out 0.12s;
+  transition: opacity 0.46s var(--ios-smooth) 0.06s;
 }
 
 .panel-head { text-align: center; cursor: grab; position: relative; }
@@ -282,7 +294,10 @@ input:focus-visible {
   letter-spacing: 0.08em;
   margin-bottom: 6px;
   color: var(--work-text); /* v8③：同 pill-phase */
-  transition: color 0.4s ease;
+  transition: color 0.4s ease, opacity 0.12s var(--ios-smooth);
+}
+.app.expanded .panel-phase {
+  transition: color 0.4s ease, opacity 0.46s var(--ios-smooth) 0.06s;
 }
 .app[data-phase="short_break"] .panel-phase { color: var(--break-text); }
 .app[data-phase="long_break"] .panel-phase { color: var(--long-text); }
@@ -776,7 +791,7 @@ input:focus-visible {
 .color-pop[hidden] { display: none; }
 /* v17：色盘入场（替换瞬现）；v17c 微过冲取消。注意基态 transform 是
    translate(-50%,-50%)，keyframe 必须带着，否则入场跳位 */
-.color-pop:not([hidden]) { animation: cp-pop 0.22s var(--spring); }
+.color-pop:not([hidden]) { animation: cp-pop 0.42s var(--ios-smooth); }
 @keyframes cp-pop {
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
 }
@@ -890,14 +905,13 @@ input:focus-visible {
   opacity: 0;
   visibility: hidden;
   transform: scale(0.96);
-  transition: opacity 0.15s ease-out, transform 0.18s var(--spring), visibility 0s 0.18s;
+  transition: opacity 0.12s var(--ios-smooth), transform 0.18s var(--ios-smooth), visibility 0s linear 0.18s;
 }
 .ctx-menu.open {
   opacity: 1;
   visibility: visible;
   transform: scale(1);
-  /* v17c：回弹全部取消，入场回到无过冲弹簧 */
-  transition: opacity 0.15s ease-out, transform 0.2s var(--spring), visibility 0s;
+  transition: opacity 0.32s var(--ios-smooth), transform 0.42s var(--ios-smooth), visibility 0s linear;
 }
 .ctx-item {
   display: block;
@@ -939,7 +953,7 @@ input:focus-visible {
   opacity: 0;
   pointer-events: none;
   /* v17：与主 morph 同 280ms 同弹簧（全套节奏统一） */
-  transition: transform var(--dur-morph) var(--spring), opacity 0.16s ease;
+  transition: transform var(--dur-smooth) var(--ios-smooth), opacity var(--dur-smooth) var(--ios-smooth);
   z-index: 20;
 }
 .app.drawer-open .drawer {
@@ -1335,6 +1349,33 @@ body.mock-preview .app {
 .hotkey-cap:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel > :not(.panel-head):not(.drawer),
+  .app.expanded .panel > :not(.panel-head):not(.drawer),
+  .progress-track,
+  .app.expanded .progress-track,
+  .cycle-dots,
+  .app.expanded .cycle-dots {
+    transition: opacity 0.18s linear;
+  }
+  .panel-phase,
+  .app.expanded .panel-phase {
+    transition: color 0.4s ease, opacity 0.18s linear;
+  }
+  .drawer {
+    transform: none;
+    transition: opacity 0.18s linear;
+  }
+  .ctx-menu,
+  .ctx-menu.open {
+    transform: none;
+    transition: opacity 0.18s linear, visibility 0s linear;
+  }
+  .color-pop:not([hidden]) {
+    animation: none;
+  }
 }
 
 /* ---------- v11 托盘菜单页：菜单即窗口内容 ----------
