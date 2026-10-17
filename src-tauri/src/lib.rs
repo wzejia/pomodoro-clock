@@ -2,7 +2,7 @@ mod appconfig;
 mod stats;
 mod timer;
 
-use appconfig::{AppConfig, HotkeyConfig, Material};
+use appconfig::{AppConfig, HotkeyConfig, Material, Theme};
 use stats::StatsStore;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -19,7 +19,7 @@ fn stats_path() -> PathBuf {
         .join("stats.json")
 }
 
-/// config.json 与 stats.json 同目录同策略：缺失/损坏回退默认（TimerConfig::load 保证不崩）
+/// config.json 与 stats.json 同目录同策略：缺失/损坏回退默认（AppConfig::load 钳制时长并不崩）
 fn config_path() -> PathBuf {
     std::env::current_exe()
         .ok()
@@ -37,6 +37,8 @@ struct AppState {
     hotkey: Mutex<appconfig::HotkeyConfig>,
     /// 三阶段自定义配色（config.json 持久化；None=默认）
     colors: Mutex<appconfig::Colors>,
+    /// 浅色/深色，与计时参数同住 config.json
+    theme: Mutex<Theme>,
     /// 实际注册生效的快捷键字符串（注册失败/关闭时为 None；可能≠配置值——启动降级）
     hotkey_effective: Mutex<Option<String>>,
 }
@@ -53,20 +55,53 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn save_config(state: &AppState) {
+    if let Err(e) = current_appconfig(state).save(&config_path()) {
+        eprintln!("[config] 保存失败: {e}");
+    }
+}
+
+fn emit_snapshot(app: &AppHandle, snap: &TimerSnapshot) {
+    let _ = app.emit("timer-tick", TickPayload { snapshot: snap.clone() });
+}
+
+fn reveal_main(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+fn main_is_visible(app: &AppHandle) -> bool {
+    app.get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
 /// 阶段完成后的统一处理：落统计（仅工作番茄）、存盘、发系统通知
 fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseCompleted) {
+    let (cfg, work_secs) = {
+        let timer = state.timer.lock().unwrap();
+        (*timer.config(), timer.work_duration_secs())
+    };
     if ev.from == Phase::Work {
         let mut stats = state.stats.lock().unwrap();
-        stats.add_record(
-            chrono::Local::now().timestamp(),
-            state.timer.lock().unwrap().work_duration_secs(),
-        );
-        let _ = stats.save(&stats_path());
+        stats.add_record(chrono::Local::now().timestamp(), work_secs);
+        if let Err(e) = stats.save(&stats_path()) {
+            eprintln!("[stats] 保存失败: {e}");
+        }
+        save_config(state);
     }
+    let short_min = (cfg.short_break_ms / 60_000).max(1);
+    let long_min = (cfg.long_break_ms / 60_000).max(1);
+    let every = cfg.long_break_every.max(1);
     let (title, body) = match ev.to {
-        Phase::ShortBreak => ("专注完成 🍅", "辛苦了，休息 5 分钟吧"),
-        Phase::LongBreak => ("完成一组番茄 🎉", "连续 4 个番茄，长休息 15 分钟"),
-        Phase::Work => ("休息结束", "准备好开始下一段专注了吗"),
+        Phase::ShortBreak => ("专注完成 🍅".to_string(), format!("辛苦了，休息 {short_min} 分钟吧")),
+        Phase::LongBreak => (
+            "完成一组番茄 🎉".to_string(),
+            format!("连续 {every} 个番茄，长休息 {long_min} 分钟"),
+        ),
+        Phase::Work => ("休息结束".to_string(), "准备好开始下一段专注了吗".to_string()),
     };
     let r = app.notification().builder().title(title).body(body).show();
     eprintln!("[notify] show result: {r:?}");
@@ -76,29 +111,39 @@ fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseComplet
     }
 }
 
-#[tauri::command]
-fn timer_start(state: State<AppState>) {
-    state.timer.lock().unwrap().start(now_ms());
+fn commit_timer(app: &AppHandle, state: &AppState, f: impl FnOnce(&mut Timer)) -> TimerSnapshot {
+    let snap = {
+        let mut t = state.timer.lock().unwrap();
+        f(&mut t);
+        t.snapshot()
+    };
+    emit_snapshot(app, &snap);
+    snap
 }
 
 #[tauri::command]
-fn timer_pause(state: State<AppState>) {
-    state.timer.lock().unwrap().pause(now_ms());
+fn timer_start(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
+    commit_timer(&app, &state, |t| t.start(now_ms()))
 }
 
 #[tauri::command]
-fn timer_resume(state: State<AppState>) {
-    state.timer.lock().unwrap().resume(now_ms());
+fn timer_pause(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
+    commit_timer(&app, &state, |t| t.pause(now_ms()))
 }
 
 #[tauri::command]
-fn timer_reset(state: State<AppState>) {
-    state.timer.lock().unwrap().reset();
+fn timer_resume(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
+    commit_timer(&app, &state, |t| t.resume(now_ms()))
 }
 
 #[tauri::command]
-fn timer_skip(state: State<AppState>) -> timer::PhaseCompleted {
-    state.timer.lock().unwrap().skip()
+fn timer_reset(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
+    commit_timer(&app, &state, |t| t.reset())
+}
+
+#[tauri::command]
+fn timer_skip(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
+    commit_timer(&app, &state, |t| { let _ = t.skip(); })
 }
 
 #[tauri::command]
@@ -106,19 +151,27 @@ fn timer_snapshot(state: State<AppState>) -> TimerSnapshot {
     state.timer.lock().unwrap().snapshot()
 }
 
-/// 「开始/暂停」切换：托盘菜单与全局快捷键共用（与前端 toggleRun 同语义）。
-/// 状态变化经 250ms tick 广播回前端，UI 无需额外事件。
-fn toggle_run(state: &AppState) {
-    let mut t = state.timer.lock().unwrap();
-    match t.snapshot().status {
-        Status::Running => t.pause(now_ms()),
-        Status::Paused => t.resume(now_ms()),
-        Status::Idle => t.start(now_ms()),
+fn toggle_in_place(timer: &mut Timer) {
+    match timer.snapshot().status {
+        Status::Running => timer.pause(now_ms()),
+        Status::Paused => timer.resume(now_ms()),
+        Status::Idle => timer.start(now_ms()),
     }
+}
+
+/// 窗口藏着时只唤回。窗口可见时切换计时，并立刻广播快照。
+fn hotkey_pressed(app: &AppHandle) {
+    if !main_is_visible(app) {
+        reveal_main(app);
+        return;
+    }
+    let state = app.state::<AppState>();
+    commit_timer(app, &state, toggle_in_place);
 }
 
 #[tauri::command]
 fn set_config(
+    app: AppHandle,
     state: State<AppState>,
     work_min: u64,
     short_break_min: u64,
@@ -126,21 +179,22 @@ fn set_config(
     long_break_every: u32,
     auto_start_next: bool,
     daily_goal: u32,
-) {
-    {
+) -> TimerSnapshot {
+    let snap = {
         let mut t = state.timer.lock().unwrap();
         let mut cfg = *t.config();
-        cfg.work_ms = work_min * 60_000;
-        cfg.short_break_ms = short_break_min * 60_000;
-        cfg.long_break_ms = long_break_min * 60_000;
-        // every=0 会在 next_phase_after 取模 panic，下限钳 1
-        cfg.long_break_every = long_break_every.max(1);
+        cfg.work_ms = work_min.clamp(1, 120) * 60_000;
+        cfg.short_break_ms = short_break_min.clamp(1, 60) * 60_000;
+        cfg.long_break_ms = long_break_min.clamp(1, 60) * 60_000;
+        cfg.long_break_every = long_break_every.clamp(1, 10);
         cfg.auto_start_next = auto_start_next;
-        // 目标刻度锚点：0 会让周/月图退化回纯相对刻度，钳 1–20（与前端步进器范围一致）
         cfg.daily_goal = daily_goal.clamp(1, 20);
-        t.set_config(cfg);
-    } // 先放锁再组 AppConfig（current_appconfig 内部要锁 timer，防自死锁）
-    let _ = current_appconfig(&state).save(&config_path());
+        t.apply_prefs(cfg);
+        t.snapshot()
+    };
+    save_config(&state);
+    emit_snapshot(&app, &snap);
+    snap
 }
 
 #[tauri::command]
@@ -152,7 +206,7 @@ fn get_config(state: State<AppState>) -> AppConfig {
 #[tauri::command]
 fn set_material(state: State<AppState>, material: Material) {
     *state.material.lock().unwrap() = material;
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
 }
 
 /// 三阶段自定义配色（08-16 v16）：同 set_material 模式——只动 UI 不动计时；
@@ -161,7 +215,7 @@ fn set_material(state: State<AppState>, material: Material) {
 fn set_colors(state: State<AppState>, colors: appconfig::Colors) -> Result<(), String> {
     colors.validate()?;
     *state.colors.lock().unwrap() = colors;
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
     Ok(())
 }
 
@@ -174,12 +228,21 @@ struct HotkeyState {
 }
 
 fn current_appconfig(state: &AppState) -> AppConfig {
+    let timer = state.timer.lock().unwrap();
     AppConfig {
-        timer: *state.timer.lock().unwrap().config(),
+        timer: *timer.config(),
+        completed_work_count: timer.completed_count(),
         material: *state.material.lock().unwrap(),
         hotkey: state.hotkey.lock().unwrap().clone(),
         colors: state.colors.lock().unwrap().clone(),
+        theme: *state.theme.lock().unwrap(),
     }
+}
+
+#[tauri::command]
+fn set_theme(state: State<AppState>, theme: Theme) {
+    *state.theme.lock().unwrap() = theme;
+    save_config(&state);
 }
 
 fn current_hotkey_state(state: &AppState) -> HotkeyState {
@@ -223,7 +286,7 @@ fn set_hotkey(
         *state.hotkey_effective.lock().unwrap() = None;
     }
     *state.hotkey.lock().unwrap() = HotkeyConfig { enabled, shortcut: want };
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
     Ok(current_hotkey_state(&state))
 }
 
@@ -269,10 +332,11 @@ fn log_js_error(message: String) {
 
 /* ---------------- v11 托盘自绘菜单配套命令 ---------------- */
 
-/// 托盘菜单「开始/暂停」：与全局快捷键共用 toggle 链路（状态经 tick 广播回前端）
+/// 托盘菜单「开始/暂停」：切换计时，并显示主窗。返回并广播新快照。
 #[tauri::command]
-fn timer_toggle(state: State<AppState>) {
-    toggle_run(&state);
+fn timer_toggle(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
+    reveal_main(&app);
+    commit_timer(&app, &state, toggle_in_place)
 }
 
 /// 托盘菜单关闭：hide 本窗 + 通知主窗（主面板若展开且未聚焦→整收，瞬态语义补全）
@@ -508,6 +572,11 @@ pub mod traymenu {
     }
 
     /// 含某点的显示器工作区（物理 px）；失败回退主屏全屏矩形并记日志（不崩不弹窗）
+    #[cfg(not(windows))]
+    pub fn work_area_of_point(_px: i32, _py: i32) -> (i32, i32, i32, i32) {
+        (0, 0, 1920, 1080)
+    }
+
     #[cfg(windows)]
     pub fn work_area_of_point(px: i32, py: i32) -> (i32, i32, i32, i32) {
         #[link(name = "user32")]
@@ -616,9 +685,8 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
-                    // 全局快捷键与托盘「开始/暂停」共用 toggle 链路（前端 toggleRun 同语义）
                     if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        toggle_run(&app.state::<AppState>());
+                        hotkey_pressed(app);
                     }
                 })
                 .build(),
@@ -645,12 +713,15 @@ pub fn run() {
 
             let stats = StatsStore::load(&stats_path());
             let appcfg = AppConfig::load(&config_path());
+            let mut timer = Timer::new(appcfg.timer);
+            timer.restore_completed(appcfg.completed_work_count);
             app.manage(AppState {
-                timer: Mutex::new(Timer::new(appcfg.timer)),
+                timer: Mutex::new(timer),
                 stats: Mutex::new(stats),
                 material: Mutex::new(appcfg.material),
                 hotkey: Mutex::new(appcfg.hotkey.clone()),
                 colors: Mutex::new(appcfg.colors),
+                theme: Mutex::new(appcfg.theme),
                 hotkey_effective: Mutex::new(None),
             });
 
@@ -661,7 +732,7 @@ pub fn run() {
                 tauri::WebviewUrl::App("tray-menu.html".into()),
             )
             .title("番茄钟菜单")
-            .inner_size(160.0, 124.0)
+            .inner_size(168.0, 156.0)
             .decorations(false)
             .transparent(true)
             .always_on_top(true)
@@ -813,6 +884,7 @@ pub fn run() {
             get_config,
             set_material,
             set_colors,
+            set_theme,
             get_hotkey,
             set_hotkey,
             stats_summary,

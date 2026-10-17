@@ -17,7 +17,10 @@
   --hairline: rgba(0, 0, 0, 0.1);
   --text: #1d1d1f;
   --text-secondary: #6e6e73;
-  --text-tertiary: #86868b;
+  --text-tertiary: #5c5c61;
+  --break-text: #0b7a32;
+  --long-text: #0055b3;
+  --on-phase: #1d1d1f;
   --separator: rgba(0, 0, 0, 0.08);
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.14), 0 1px 4px rgba(0, 0, 0, 0.08);
   --accent: #0071e3;
@@ -43,8 +46,10 @@
   --radius-card: 14px;
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --spring-gentle: cubic-bezier(0.25, 1, 0.5, 1);
-  /* v17c 动效基线：抽屉 280ms；全部回弹取消（--spring-pop 已删，用户拍板） */
-  --dur-morph: 280ms;
+  /* WWDC23 bounce 0 平滑弹簧采样。感知时长 0.42s，视觉落定约 0.57s，不过冲。 */
+  --ios-smooth: linear(0 0%, 0.0995 6%, 0.2864 13%, 0.472 19%, 0.6256 25%, 0.7423 31%, 0.8263 38%, 0.8848 44%, 0.9246 50%, 0.9511 56%, 0.9686 63%, 0.98 69%, 0.9873 75%, 0.992 81%, 0.995 88%, 0.9968 94%, 0.998 100%);
+  --dur-smooth: 0.57s;
+  --dur-morph: 0.45s;
 }
 
 [data-theme="dark"] {
@@ -55,7 +60,10 @@
   --hairline: rgba(255, 255, 255, 0.2);
   --text: #f5f5f7;
   --text-secondary: #adaeb2;
-  --text-tertiary: #84848a;
+  --text-tertiary: #aeaeb2;
+  --break-text: #30d158;
+  --long-text: #64d2ff;
+  --on-phase: #1d1d1f;
   --separator: rgba(255, 255, 255, 0.1);
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
   --accent: #0a84ff;
@@ -87,6 +95,15 @@ html, body {
   user-select: none;
   -webkit-user-select: none;
   font-feature-settings: "tnum";
+}
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---------- 布局骨架：迷你 / 展开 ---------- */
@@ -157,8 +174,8 @@ html, body {
   flex-shrink: 0;
   transition: color 0.4s ease;
 }
-.app[data-phase="short_break"] .pill-phase { color: var(--break); }
-.app[data-phase="long_break"] .pill-phase { color: var(--long); }
+.app[data-phase="short_break"] .pill-phase { color: var(--break-text); }
+.app[data-phase="long_break"] .pill-phase { color: var(--long-text); }
 
 .pill-time {
   flex: 1;
@@ -171,7 +188,7 @@ html, body {
 }
 
 .app[data-status="paused"] .pill-time,
-.app[data-status="paused"] .panel-time { opacity: 0.45; transition: opacity 0.3s ease; }
+.app[data-status="paused"] .panel-time { opacity: 0.45; }
 
 /* ---------- v11 胶囊底部 2px 进度条 ----------
    贴底边（bottom:0），左右 26px inset 对齐胶囊底边平段（R38 圆角在底部 2px 处弦宽约 168px），
@@ -227,25 +244,45 @@ html, body {
   top: 0;
   /* 固定自然尺寸预布局：morph 期间被卡片 overflow 裁切，内容零形变 */
   width: 340px;
-  /* v11：456→467（抽屉加快捷键卡，与 main.ts PANEL_H 同步，两处必须同改） */
+  /* v11：456→467（抽屉加快捷键卡，与 morph.ts PANEL_H 同步，两处必须同改） */
   height: 467px;
   display: flex;
   flex-direction: column;
   padding: 20px 18px 14px;
   gap: 14px;
-  /* 收起时快速淡出（旧内容先走） */
-  opacity: 0;
+  opacity: 1;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.1s ease-out, visibility 0s 0.1s;
+  transition: visibility 0s linear 0.5s;
 }
 .app.expanded .panel {
-  /* 展开时延迟淡入（新内容后到；时间数字另有 FLIP 连续形变叠加）。
-     v17c：0.24s/0.12s 与 340ms 主曲线同呼吸——淡入不再中途完成显得突兀 */
-  opacity: 1;
   visibility: visible;
   pointer-events: auto;
-  transition: opacity 0.24s ease-out 0.12s, visibility 0s;
+  transition: visibility 0s linear;
+}
+.panel > :not(.panel-head):not(.drawer),
+.panel-phase,
+.progress-track,
+.cycle-dots {
+  opacity: 0;
+}
+.panel > :not(.panel-head):not(.drawer) {
+  transition: opacity 0.1s var(--ios-smooth);
+}
+.panel-phase,
+.progress-track,
+.cycle-dots {
+  transition: opacity 0.12s var(--ios-smooth);
+}
+.app.expanded .panel > :not(.panel-head):not(.drawer) {
+  opacity: 1;
+  transition: opacity 0.42s var(--ios-smooth) 0.14s;
+}
+.app.expanded .panel-phase,
+.app.expanded .progress-track,
+.app.expanded .cycle-dots {
+  opacity: 1;
+  transition: opacity 0.46s var(--ios-smooth) 0.06s;
 }
 
 .panel-head { text-align: center; cursor: grab; position: relative; }
@@ -257,10 +294,13 @@ html, body {
   letter-spacing: 0.08em;
   margin-bottom: 6px;
   color: var(--work-text); /* v8③：同 pill-phase */
-  transition: color 0.4s ease;
+  transition: color 0.4s ease, opacity 0.12s var(--ios-smooth);
 }
-.app[data-phase="short_break"] .panel-phase { color: var(--break); }
-.app[data-phase="long_break"] .panel-phase { color: var(--long); }
+.app.expanded .panel-phase {
+  transition: color 0.4s ease, opacity 0.46s var(--ios-smooth) 0.06s;
+}
+.app[data-phase="short_break"] .panel-phase { color: var(--break-text); }
+.app[data-phase="long_break"] .panel-phase { color: var(--long-text); }
 
 .panel-time {
   font-size: 56px;
@@ -337,7 +377,7 @@ html, body {
   transition: filter 0.18s ease, background-color 0.2s ease;
 }
 [data-theme="dark"] .btn { color: rgba(255, 255, 255, 0.85); }
-[data-theme="dark"] .btn-primary { color: #fff; }
+[data-theme="dark"] .btn-primary { color: var(--on-phase); }
 .btn:hover { filter: brightness(0.96); }
 .btn:active { filter: brightness(0.88); transition-duration: 0.06s; }
 [data-theme="dark"] .btn:hover { filter: brightness(1.15); }
@@ -345,7 +385,7 @@ html, body {
 
 .btn-primary {
   background: var(--work);
-  color: #fff;
+  color: var(--on-phase);
   font-weight: 600;
 }
 .app[data-phase="short_break"] .btn-primary { background: var(--break); }
@@ -751,7 +791,7 @@ html, body {
 .color-pop[hidden] { display: none; }
 /* v17：色盘入场（替换瞬现）；v17c 微过冲取消。注意基态 transform 是
    translate(-50%,-50%)，keyframe 必须带着，否则入场跳位 */
-.color-pop:not([hidden]) { animation: cp-pop 0.22s var(--spring); }
+.color-pop:not([hidden]) { animation: cp-pop 0.42s var(--ios-smooth); }
 @keyframes cp-pop {
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.96); }
 }
@@ -805,7 +845,7 @@ html, body {
   font-weight: 600;
   /* 评审 P3 修：跟随当前编辑的阶段色（而非恒专注红）——悬停预览时同步变色 */
   background: var(--cp-hue-color, var(--work));
-  color: #fff;
+  color: var(--on-phase);
   cursor: pointer;
   flex-shrink: 0;
   transition: filter 0.18s ease;
@@ -865,14 +905,13 @@ html, body {
   opacity: 0;
   visibility: hidden;
   transform: scale(0.96);
-  transition: opacity 0.15s ease-out, transform 0.18s var(--spring), visibility 0s 0.18s;
+  transition: opacity 0.12s var(--ios-smooth), transform 0.18s var(--ios-smooth), visibility 0s linear 0.18s;
 }
 .ctx-menu.open {
   opacity: 1;
   visibility: visible;
   transform: scale(1);
-  /* v17c：回弹全部取消，入场回到无过冲弹簧 */
-  transition: opacity 0.15s ease-out, transform 0.2s var(--spring), visibility 0s;
+  transition: opacity 0.32s var(--ios-smooth), transform 0.42s var(--ios-smooth), visibility 0s linear;
 }
 .ctx-item {
   display: block;
@@ -914,7 +953,7 @@ html, body {
   opacity: 0;
   pointer-events: none;
   /* v17：与主 morph 同 280ms 同弹簧（全套节奏统一） */
-  transition: transform var(--dur-morph) var(--spring), opacity 0.16s ease;
+  transition: transform var(--dur-smooth) var(--ios-smooth), opacity var(--dur-smooth) var(--ios-smooth);
   z-index: 20;
 }
 .app.drawer-open .drawer {
@@ -1200,7 +1239,7 @@ body.mock-preview .app {
 [data-theme="dark"][data-material="liquid_glass"] .btn-primary {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 42%), var(--work);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -1px 1.5px rgba(0, 0, 0, 0.12);
-  color: #fff;
+  color: var(--on-phase);
 }
 [data-theme="dark"][data-material="liquid_glass"] .stepper,
 [data-theme="dark"][data-material="liquid_glass"] .setting-input input,
@@ -1301,6 +1340,47 @@ body.mock-preview .app {
 @media (prefers-contrast: more) {
   [data-material="liquid_glass"] .app {
     box-shadow: inset 0 0 0 1px var(--text);
+  }
+}
+
+.stepper-val input:focus-visible,
+.color-hex:focus-visible,
+.cp-hex:focus-visible,
+.hotkey-cap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel > :not(.panel-head):not(.drawer),
+  .app.expanded .panel > :not(.panel-head):not(.drawer),
+  .progress-track,
+  .app.expanded .progress-track,
+  .cycle-dots,
+  .app.expanded .cycle-dots {
+    transition: opacity 0.18s linear;
+  }
+  .panel-phase,
+  .app.expanded .panel-phase {
+    transition: color 0.4s ease, opacity 0.18s linear;
+  }
+  .drawer {
+    transform: none;
+    transition: opacity 0.18s linear;
+  }
+  .ctx-menu,
+  .ctx-menu.open {
+    transform: none;
+    transition: opacity 0.18s linear, visibility 0s linear;
+  }
+  .color-pop:not([hidden]) {
+    animation: none;
+  }
+  .toggle-knob {
+    transition: none;
+  }
+  .week-bar {
+    transition: none;
   }
 }
 

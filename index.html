@@ -207,7 +207,7 @@
             <div class="cp-sv"><div class="cp-dot"></div></div>
             <div class="cp-hue"><div class="cp-hue-dot"></div></div>
             <div class="cp-foot">
-              <input class="cp-hex color-hex" maxlength="7" spellcheck="false" aria-label="色号">
+              <input class="cp-hex" maxlength="7" spellcheck="false" aria-label="色号">
               <button class="cp-done">完成</button>
             </div>
           </div>
@@ -217,6 +217,8 @@
 
     <!-- 右键菜单（自绘苹果风，主题跟随 CSS 变量） -->
     <div id="ctx-menu" class="ctx-menu" role="menu" aria-hidden="true">
+      <button id="ctx-toggle" class="ctx-item" role="menuitem">开始</button>
+      <button id="ctx-reset" class="ctx-item" role="menuitem">重置</button>
       <button id="ctx-settings" class="ctx-item" role="menuitem">设置…</button>
       <button id="ctx-autostart" class="ctx-item" role="menuitemcheckbox" aria-checked="false">开机自启</button>
       <button id="ctx-quit" class="ctx-item" role="menuitem">退出</button>

@@ -2,10 +2,15 @@
    页面随窗口创建即加载（窗口 hidden），每次打开靠 tray-menu-opened 事件现查动态项——
    Rust 侧 tick 不再写托盘文案，文案/勾选态全部以此刻真相为准。 */
 
+import { runLabel } from "./menu";
+import type { Status, TimerSnapshot } from "./bridge";
+
 const tauri = (window as any).__TAURI__;
 const invoke = tauri.core.invoke;
 const listen: (event: string, cb: (e: { payload: any }) => void) => void = tauri.event.listen;
 const emit: (event: string, payload?: unknown) => Promise<void> = tauri.event.emit;
+
+let menuOpen = false;
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -21,10 +26,13 @@ function applyMaterial(material: string) {
 let hidingIntentionally = false;
 
 /* 动态文案/勾选（每次打开现查）：开始/暂停随计时状态，自启勾跟随真实注册态 */
+function paintToggle(status: Status) {
+  $("tm-toggle").textContent = runLabel(status);
+}
+
 async function refreshState() {
-  const s = (await invoke("timer_snapshot")) as { status: string };
-  $("tm-toggle").textContent =
-    s.status === "running" ? "暂停" : s.status === "paused" ? "继续" : "开始";
+  const s = (await invoke("timer_snapshot")) as TimerSnapshot;
+  paintToggle(s.status);
   const on = (await invoke("get_autostart")) as boolean;
   const el = $("tm-autostart");
   el.classList.toggle("checked", on);
@@ -44,6 +52,15 @@ $("tm-toggle").onclick = async () => {
     await invoke("focus_main");
   } catch (err) {
     console.error("[tray-menu] toggle 失败", err);
+  }
+  await dismiss().catch((err) => console.error("[tray-menu] hide 失败", err));
+};
+$("tm-reset").onclick = async () => {
+  try {
+    await invoke("timer_reset");
+    await invoke("focus_main");
+  } catch (err) {
+    console.error("[tray-menu] reset 失败", err);
   }
   await dismiss().catch((err) => console.error("[tray-menu] hide 失败", err));
 };
@@ -77,10 +94,15 @@ $("tm-quit").onclick = () => {
    先 blur 掉残留焦点：本页常驻不 reload，上次弹出/自动化点击留下的 activeElement 会跨
    hide/show 存活，下次弹出时以「无操作自带焦点」形态出现（round-40 P2-1 环的来源之一）。 */
 listen("tray-menu-opened", () => {
+  menuOpen = true;
   hidingIntentionally = false;
   (document.activeElement as HTMLElement | null)?.blur?.();
   refreshState().catch((err) => console.error("[tray-menu] refresh 失败", err));
   emit("query-ui-style").catch(() => {});
+});
+listen("timer-tick", (e) => {
+  if (!menuOpen) return;
+  paintToggle((e.payload.snapshot as TimerSnapshot).status);
 });
 
 /* 主窗广播的主题/材质对表（托盘页跟随应用换肤） */
@@ -92,6 +114,7 @@ listen("ui-style", (e) => {
 /* 真失焦（点桌面/别窗）→ 自动关；Esc 同语义（不经 hidingIntentionally——
    主面板若展开且未聚焦会被整收，见 main.ts 的 tray-menu-closed 处理） */
 listen("tray-menu-blurred", () => {
+  menuOpen = false;
   if (hidingIntentionally) return;
   invoke("tray_menu_hide").catch((err: unknown) => console.error("[tray-menu] blur hide 失败", err));
 });
