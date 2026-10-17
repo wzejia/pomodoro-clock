@@ -1,5 +1,5 @@
 import { bridge } from "./bridge";
-import { isExpanded, setExpanded } from "./morph";
+import { isExpanded, setExpanded, whenPresented } from "./morph";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
@@ -64,7 +64,10 @@ export function closeDrawer() {
 
 export async function openSettings() {
   hideMenu();
-  if (!isExpanded()) await setExpanded(true);
+  if (!isExpanded()) {
+    void setExpanded(true);
+    await whenPresented();
+  }
   if (!isExpanded()) return;
   drawerOpen = true;
   app.classList.add("drawer-open");

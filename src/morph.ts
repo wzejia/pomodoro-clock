@@ -34,6 +34,8 @@ interface Live {
   duration: number;
   expand: boolean;
   ref: number;
+  pillScale: number;
+  windowCut: boolean;
   w: Chan; h: Chan; r: Chan;
   x: Chan; y: Chan;
   nx: Chan; ny: Chan; ns: Chan;
@@ -42,6 +44,7 @@ interface Live {
 let live: Live | null = null;
 let raf = 0;
 let settleWait: ((completed: boolean) => void) | null = null;
+let presented: (() => void) | null = null;
 let cachedGlyph: Glyph | null = null;
 /** morphBegin / morphCommit 串行，避免连点时后发的 begin 盖住已经该收小的窗口。 */
 let geomChain: Promise<void> = Promise.resolve();
@@ -145,12 +148,24 @@ function paint(p: Pose) {
   panelTime.style.transform = `translate(${p.nx}px, ${p.ny}px) scale(${p.ns})`;
 }
 
+/** 缩放过程里字重和字距跟胶囊对齐，避免两套字叠在一起。u=0 是胶囊，u=1 是面板。 */
+function styleGlyph(pillScale: number, ns: number) {
+  const span = 1 - pillScale;
+  const u = span > 0.02 ? Math.min(1, Math.max(0, (ns - pillScale) / span)) : 1;
+  panelTime.style.fontWeight = String(Math.round(600 + (400 - 600) * u));
+  panelTime.style.letterSpacing = `${(0.02 + (-0.01 - 0.02) * u).toFixed(4)}em`;
+  pillTime.style.opacity = "0";
+}
+
 function commitBox(w: number, h: number) {
   app.style.width = `${w}px`;
   app.style.height = `${h}px`;
   app.style.transform = "";
   app.style.borderRadius = "";
   panelTime.style.transform = "";
+  panelTime.style.fontWeight = "";
+  panelTime.style.letterSpacing = "";
+  pillTime.style.opacity = "";
 }
 
 function near(value: number, velocity: number, target: number, toPx: number) {
@@ -182,11 +197,25 @@ function finish(gen: number) {
   commitBox(w, h);
   const wait = settleWait;
   settleWait = null;
-  try {
+    try {
     if (expand) onExpandSettled();
   } finally {
+    releasePresented();
     wait?.(true);
   }
+}
+
+function releasePresented() {
+  const fn = presented;
+  presented = null;
+  fn?.();
+}
+
+/** 感知时长到了就让设置抽屉出现，弹簧尾巴继续。 */
+export function whenPresented(): Promise<void> {
+  if (expanded && !live && parseFloat(app.style.height || "0") >= PANEL_H - 1) return Promise.resolve();
+  if (live?.expand && (performance.now() - live.t0) / 1000 >= live.duration) return Promise.resolve();
+  return new Promise((resolve) => { presented = resolve; });
 }
 
 function tick(now: number) {
@@ -198,6 +227,15 @@ function tick(now: number) {
     return;
   }
   paint(p);
+  styleGlyph(m.pillScale, p.ns);
+  const t = (now - m.t0) / 1000;
+  if (m.expand && t >= m.duration) releasePresented();
+  if (!m.expand && !m.windowCut && t >= m.duration && Math.abs(p.x) < 4 && Math.abs(p.y) < 4) {
+    m.windowCut = true;
+    const w = Math.max(MINI_W, Math.ceil(p.w));
+    const h = Math.max(MINI_H, Math.ceil(p.h));
+    void enqueueGeom(() => bridge.morphCommit(w, h));
+  }
   raf = requestAnimationFrame(tick);
 }
 
@@ -212,6 +250,7 @@ function takeLive(now: number): Pose | null {
   const wait = settleWait;
   settleWait = null;
   wait?.(false);
+  releasePresented();
   return p;
 }
 
@@ -246,6 +285,8 @@ function launch(gen: number, expand: boolean, from: Pose, interrupted: boolean, 
     duration: expand ? EXPAND_S : COLLAPSE_S,
     expand,
     ref: nums.ref,
+    pillScale: g && g.scale > 0 ? g.scale : 24 / 56,
+    windowCut: false,
     w: chan(from.w, from.vw, expand ? PANEL_W : MINI_W),
     h: chan(from.h, from.vh, expand ? PANEL_H : MINI_H),
     r: chan(from.r, from.vr, expand ? RADIUS_PANEL : RADIUS_MINI),
@@ -258,6 +299,7 @@ function launch(gen: number, expand: boolean, from: Pose, interrupted: boolean, 
   const p = poseAt(live, now);
   if (settled(p, live)) return;
   paint(p);
+  styleGlyph(live.pillScale, p.ns);
   raf = requestAnimationFrame(tick);
 }
 
@@ -284,9 +326,11 @@ async function applyReduced(v: boolean, gen: number) {
     setMode(true);
     commitBox(PANEL_W, PANEL_H);
     onExpandSettled();
+    releasePresented();
     return;
   }
   setMode(false);
+  panelTime.style.visibility = "hidden";
   commitBox(MINI_W, MINI_H);
   await enqueueGeom(() => bridge.morphCommit(MINI_W, MINI_H));
   if (gen !== morphGen) return;

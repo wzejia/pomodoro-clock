@@ -1376,6 +1376,12 @@ body.mock-preview .app {
   .color-pop:not([hidden]) {
     animation: none;
   }
+  .toggle-knob {
+    transition: none;
+  }
+  .week-bar {
+    transition: none;
+  }
 }
 
 /* ---------- v11 托盘菜单页：菜单即窗口内容 ----------
