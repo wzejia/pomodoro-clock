@@ -118,6 +118,8 @@ pub struct Timer {
     phase: Phase,
     status: Status,
     remaining_ms: u64,
+    /// 本阶段锁定的满时长。运行或暂停中改配置不改它，下一阶段才读新时长。
+    phase_total_ms: u64,
     /// Running 时最后一次 tick 的时间戳
     last_tick_ms: u64,
     completed_work_count: u32,
@@ -129,6 +131,7 @@ impl Timer {
             phase: Phase::Work,
             status: Status::Idle,
             remaining_ms: config.work_ms,
+            phase_total_ms: config.work_ms,
             last_tick_ms: 0,
             completed_work_count: 0,
             config,
@@ -141,6 +144,14 @@ impl Timer {
 
     pub fn work_duration_secs(&self) -> u64 {
         self.config.work_ms / 1000
+    }
+
+    pub fn completed_count(&self) -> u32 {
+        self.completed_work_count
+    }
+
+    pub fn restore_completed(&mut self, n: u32) {
+        self.completed_work_count = n;
     }
 
     fn phase_duration(&self, phase: Phase) -> u64 {
@@ -156,7 +167,7 @@ impl Timer {
             phase: self.phase,
             status: self.status,
             remaining_ms: self.remaining_ms,
-            total_ms: self.phase_duration(self.phase),
+            total_ms: self.phase_total_ms,
             completed_work_count: self.completed_work_count,
             long_break_every: self.config.long_break_every,
             daily_goal: self.config.daily_goal,
@@ -166,7 +177,7 @@ impl Timer {
 
     /// 开始（Idle → Running）；运行中调用等价于重置后重新开始
     pub fn start(&mut self, now_ms: u64) {
-        self.remaining_ms = self.phase_duration(self.phase);
+        self.enter_phase(self.phase);
         self.status = Status::Running;
         self.last_tick_ms = now_ms;
     }
@@ -187,9 +198,9 @@ impl Timer {
         self.last_tick_ms = now_ms;
     }
 
-    /// 重置：回到当前阶段初始、Idle
+    /// 重置：回到当前阶段初始、Idle。本组完成数保留。
     pub fn reset(&mut self) {
-        self.remaining_ms = self.phase_duration(self.phase);
+        self.enter_phase(self.phase);
         self.status = Status::Idle;
     }
 
@@ -197,8 +208,7 @@ impl Timer {
     pub fn skip(&mut self) -> PhaseCompleted {
         let from = self.phase;
         let to = self.next_phase_after(from, false);
-        self.phase = to;
-        self.remaining_ms = self.phase_duration(to);
+        self.enter_phase(to);
         self.status = Status::Idle;
         PhaseCompleted {
             from,
@@ -207,11 +217,25 @@ impl Timer {
         }
     }
 
-    pub fn set_config(&mut self, config: TimerConfig) {
+    /// 写入偏好。空闲时当前阶段的满时长跟着变；运行或暂停中剩余时间和本阶段满时长保持，下一阶段才用新时长。
+    pub fn apply_prefs(&mut self, mut config: TimerConfig) {
+        config.long_break_every = config.long_break_every.max(1);
+        config.daily_goal = config.daily_goal.clamp(1, 20);
         self.config = config;
-        // 配置变更后当前阶段剩余时间按新时长重置（停表）
-        self.remaining_ms = self.phase_duration(self.phase);
-        self.status = Status::Idle;
+        if self.status == Status::Idle {
+            self.enter_phase(self.phase);
+            self.status = Status::Idle;
+        }
+    }
+
+    pub fn set_config(&mut self, config: TimerConfig) {
+        self.apply_prefs(config);
+    }
+
+    fn enter_phase(&mut self, phase: Phase) {
+        self.phase = phase;
+        self.phase_total_ms = self.phase_duration(phase);
+        self.remaining_ms = self.phase_total_ms;
     }
 
     /// 驱动时间前进。返回 Some 表示阶段完成并已自动切换（新阶段自动开跑）。
@@ -228,8 +252,7 @@ impl Timer {
             self.completed_work_count += 1;
         }
         let to = self.next_phase_after(from, true);
-        self.phase = to;
-        self.remaining_ms = self.phase_duration(to);
+        self.enter_phase(to);
         // auto_start_next=true 时自动开跑下一阶段；否则停表等手动开始
         if self.config.auto_start_next {
             self.status = Status::Running;
@@ -429,16 +452,75 @@ mod tests {
     }
 
     #[test]
-    fn set_config_resets_current_phase() {
+    fn apply_prefs_keeps_running_phase() {
         let mut t = default_timer();
         t.start(0);
         t.tick(5_000);
+        let remain = t.snapshot().remaining_ms;
+        let mut cfg = *t.config();
+        cfg.daily_goal = 3;
+        cfg.auto_start_next = true;
+        cfg.work_ms = 50 * MIN;
+        t.apply_prefs(cfg);
+        let s = t.snapshot();
+        assert_eq!(s.status, Status::Running);
+        assert_eq!(s.remaining_ms, remain);
+        assert_eq!(s.total_ms, 25 * MIN);
+        assert_eq!(s.daily_goal, 3);
+        assert_eq!(s.work_ms, 50 * MIN);
+    }
+
+    #[test]
+    fn apply_prefs_paused_keeps_status() {
+        let mut t = default_timer();
+        t.start(0);
+        t.tick(5_000);
+        t.pause(5_000);
+        let remain = t.snapshot().remaining_ms;
+        let mut cfg = *t.config();
+        cfg.short_break_ms = 8 * MIN;
+        t.apply_prefs(cfg);
+        let s = t.snapshot();
+        assert_eq!(s.status, Status::Paused);
+        assert_eq!(s.remaining_ms, remain);
+        assert_eq!(s.phase, Phase::Work);
+    }
+
+    #[test]
+    fn apply_prefs_idle_refreshes_full_duration() {
+        let mut t = default_timer();
         let mut cfg = TimerConfig::default();
         cfg.work_ms = 50 * MIN;
-        t.set_config(cfg);
+        t.apply_prefs(cfg);
         let s = t.snapshot();
         assert_eq!(s.status, Status::Idle);
         assert_eq!(s.remaining_ms, 50 * MIN);
+        assert_eq!(s.total_ms, 50 * MIN);
+    }
+
+    #[test]
+    fn restore_completed_survives_reset() {
+        let mut t = default_timer();
+        t.restore_completed(3);
+        assert_eq!(t.snapshot().completed_work_count, 3);
+        t.reset();
+        assert_eq!(t.snapshot().status, Status::Idle);
+        assert_eq!(t.snapshot().completed_work_count, 3);
+        assert_eq!(t.snapshot().remaining_ms, 25 * MIN);
+    }
+
+    #[test]
+    fn next_phase_uses_duration_changed_while_running() {
+        let mut t = default_timer();
+        t.start(0);
+        let mut cfg = *t.config();
+        cfg.short_break_ms = 8 * MIN;
+        t.apply_prefs(cfg);
+        let ev = t.tick(25 * MIN).unwrap();
+        assert_eq!(ev.to, Phase::ShortBreak);
+        assert_eq!(t.snapshot().remaining_ms, 8 * MIN);
+        assert_eq!(t.snapshot().total_ms, 8 * MIN);
+        assert_eq!(t.snapshot().status, Status::Idle);
     }
 
     /// 间隔可调：set_config 把 long_break_every 改成 2 后，第 2 个工作番茄即触发长休

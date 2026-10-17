@@ -48,6 +48,20 @@ impl Colors {
     }
 }
 
+/// 界面主题。旧 config.json 没有该字段时回到浅色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    Light,
+    Dark,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme::Light
+    }
+}
+
 /// 全局快捷键配置：enabled=false 时保留 shortcut 记忆（再开恢复）
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -84,6 +98,9 @@ pub struct AppConfig {
     pub hotkey: HotkeyConfig,
     /// 三阶段自定义配色（None=默认；serde(default) 保证旧 config.json 升级不炸）
     pub colors: Colors,
+    pub theme: Theme,
+    /// 本组已完成的工作番茄。今日个数在 stats.json，这是圆点和长休间隔的进度。
+    pub completed_work_count: u32,
 }
 
 impl Default for AppConfig {
@@ -93,7 +110,23 @@ impl Default for AppConfig {
             material: Material::default(),
             hotkey: HotkeyConfig::default(),
             colors: Colors::default(),
+            theme: Theme::default(),
+            completed_work_count: 0,
         }
+    }
+}
+
+fn clamp_minutes_ms(ms: u64, min_minutes: u64, max_minutes: u64) -> u64 {
+    ms.clamp(min_minutes * 60_000, max_minutes * 60_000)
+}
+
+impl AppConfig {
+    fn normalize(&mut self) {
+        self.timer.work_ms = clamp_minutes_ms(self.timer.work_ms, 1, 120);
+        self.timer.short_break_ms = clamp_minutes_ms(self.timer.short_break_ms, 1, 60);
+        self.timer.long_break_ms = clamp_minutes_ms(self.timer.long_break_ms, 1, 60);
+        self.timer.long_break_every = self.timer.long_break_every.clamp(1, 10);
+        self.timer.daily_goal = self.timer.daily_goal.clamp(1, 20);
     }
 }
 
@@ -102,10 +135,14 @@ impl AppConfig {
     pub fn load(path: &std::path::Path) -> Self {
         match std::fs::read_to_string(path) {
             // 08-18 P2-2：单字段类型错会整份回默认——至少留日志，用户配置"消失"可追溯
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-                eprintln!("[config] 应用配置解析失败，回默认（{e}）");
-                Self::default()
-            }),
+            Ok(s) => {
+                let mut cfg: Self = serde_json::from_str(&s).unwrap_or_else(|e| {
+                    eprintln!("[config] 应用配置解析失败，回默认（{e}）");
+                    Self::default()
+                });
+                cfg.normalize();
+                cfg
+            }
             Err(_) => Self::default(),
         }
     }
@@ -158,6 +195,8 @@ mod tests {
                 short_break: Some("#30d158".to_string()),
                 long_break: Some("#64d2ff".to_string()),
             },
+            theme: Theme::Dark,
+            completed_work_count: 2,
         };
         cfg.save(&path).unwrap();
         let loaded = AppConfig::load(&path);
@@ -309,5 +348,23 @@ mod tests {
         assert!(HotkeyConfig::validate("Ctrl+Alt").is_err()); // 无主键
         assert!(HotkeyConfig::validate("").is_err());
         assert!(HotkeyConfig::validate("Ctrl+Alt+P+X").is_err()); // 双主键
+    }
+
+    #[test]
+    fn load_clamps_every_goal_and_fills_theme() {
+        let dir = tmpdir("clamp");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"work_ms":0,"short_break_ms":300000,"long_break_ms":900000,"long_break_every":0,"auto_start_next":false,"daily_goal":40}"#,
+        )
+        .unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.timer.work_ms, 60_000);
+        assert_eq!(loaded.timer.long_break_every, 1);
+        assert_eq!(loaded.timer.daily_goal, 20);
+        assert_eq!(loaded.theme, Theme::Light);
+        assert_eq!(loaded.completed_work_count, 0);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -1,3 +1,5 @@
+import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+
 /* 前后端桥：真实 Tauri 环境走 IPC；纯浏览器环境走 mock（仅供截图评审/开发预览，
    mock 不参与真实应用的计时真相） */
 
@@ -29,6 +31,8 @@ export interface HotkeyState extends HotkeyConfig { effective: string | null; }
 /** 三阶段自定义配色（null=跟随主题默认；"#rrggbb" 小写） */
 export interface PhaseColors { work: string | null; short_break: string | null; long_break: string | null; }
 
+export type ThemeName = "light" | "dark";
+
 export interface TimerConfig {
   work_ms: number;
   short_break_ms: number;
@@ -39,6 +43,8 @@ export interface TimerConfig {
   material: Material;
   hotkey: HotkeyConfig;
   colors: PhaseColors;
+  theme: ThemeName;
+  completed_work_count: number;
 }
 
 export interface DayBar { date: string; count: number; minutes: number; }
@@ -112,11 +118,8 @@ function createTauriBridge(): Bridge {
       await invoke("morph_commit", { width, height });
     },
     async requestNotifyPermission() {
-      const n = tauri.notification;
-      let granted = await n.isPermissionGranted();
-      if (!granted) {
-        granted = (await n.requestPermission()) === "granted";
-      }
+      const granted = await isPermissionGranted();
+      if (!granted) await requestPermission();
     },
   };
 }
@@ -135,9 +138,12 @@ function createMockBridge(): Bridge {
     long_break: 15 * 60_000,
   };
   let remaining = 12 * 60_000 + 34_000;
+  let phaseTotal = 25 * 60_000;
   let completed = 2;
   let longEvery = 4;
   let goal = 8;
+  let autoStart = false;
+  let theme: ThemeName = "light";
   let material: Material = "liquid_glass";
   // v16：mock 配色内存态（默认全 null）
   let mockColors: PhaseColors = { work: null, short_break: null, long_break: null };
@@ -147,10 +153,15 @@ function createMockBridge(): Bridge {
   let hotkeyShortcut = "Ctrl+Alt+O";
 
   const snap = (): TimerSnapshot => ({
-    phase, status, remaining_ms: remaining, total_ms: durations[phase],
+    phase, status, remaining_ms: remaining, total_ms: phaseTotal,
     completed_work_count: completed, long_break_every: longEvery,
     daily_goal: goal, work_ms: durations.work,
   });
+  const enter = (next: Phase) => {
+    phase = next;
+    phaseTotal = durations[next];
+    remaining = phaseTotal;
+  };
 
   setInterval(() => {
     const now = Date.now();
@@ -172,32 +183,41 @@ function createMockBridge(): Bridge {
     isMock: true,
     async invoke(cmd, args) {
       switch (cmd) {
-        case "timer_start": status = "running"; remaining = durations[phase]; break;
-        case "timer_pause": status = "paused"; break;
-        case "timer_resume": status = "running"; break;
-        case "timer_reset": status = "idle"; remaining = durations[phase]; break;
+        case "timer_start": status = "running"; enter(phase); return snap();
+        case "timer_pause": status = "paused"; return snap();
+        case "timer_resume": status = "running"; return snap();
+        case "timer_reset": status = "idle"; enter(phase); return snap();
+        case "timer_toggle":
+          if (status === "running") status = "paused";
+          else if (status === "paused") status = "running";
+          else { status = "running"; enter(phase); }
+          return snap();
         case "timer_skip":
-          phase = phase === "work" ? "short_break" : "work";
-          status = "idle"; remaining = durations[phase];
-          break;
+          enter(phase === "work" ? "short_break" : "work");
+          status = "idle";
+          return snap();
         case "timer_snapshot": return snap();
         case "set_config":
-          // 前端发 camelCase（Tauri 侧自动转 snake_case；mock 直收 camelCase）
           durations.work = (args?.workMin as number) * 60_000;
           durations.short_break = (args?.shortBreakMin as number) * 60_000;
           durations.long_break = (args?.longBreakMin as number) * 60_000;
           longEvery = (args?.longBreakEvery as number) ?? longEvery;
           goal = (args?.dailyGoal as number) ?? goal;
-          if (status === "idle") remaining = durations[phase];
-          break;
+          autoStart = !!args?.autoStartNext;
+          if (status === "idle") enter(phase);
+          return snap();
         case "get_config":
           return {
             work_ms: durations.work, short_break_ms: durations.short_break,
             long_break_ms: durations.long_break, long_break_every: longEvery,
-            auto_start_next: false, daily_goal: goal, material,
+            auto_start_next: autoStart, daily_goal: goal, material,
             hotkey: { enabled: hotkeyEnabled, shortcut: hotkeyShortcut },
             colors: { ...mockColors },
+            theme, completed_work_count: completed,
           } satisfies TimerConfig;
+        case "set_theme":
+          theme = (args?.theme as ThemeName) ?? theme;
+          break;
         case "set_material":
           material = (args?.material as Material) ?? material;
           break;

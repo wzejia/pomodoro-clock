@@ -17,7 +17,10 @@
   --hairline: rgba(0, 0, 0, 0.1);
   --text: #1d1d1f;
   --text-secondary: #6e6e73;
-  --text-tertiary: #86868b;
+  --text-tertiary: #5c5c61;
+  --break-text: #0b7a32;
+  --long-text: #0055b3;
+  --on-phase: #1d1d1f;
   --separator: rgba(0, 0, 0, 0.08);
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.14), 0 1px 4px rgba(0, 0, 0, 0.08);
   --accent: #0071e3;
@@ -55,7 +58,10 @@
   --hairline: rgba(255, 255, 255, 0.2);
   --text: #f5f5f7;
   --text-secondary: #adaeb2;
-  --text-tertiary: #84848a;
+  --text-tertiary: #aeaeb2;
+  --break-text: #30d158;
+  --long-text: #64d2ff;
+  --on-phase: #1d1d1f;
   --separator: rgba(255, 255, 255, 0.1);
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
   --accent: #0a84ff;
@@ -87,6 +93,15 @@ html, body {
   user-select: none;
   -webkit-user-select: none;
   font-feature-settings: "tnum";
+}
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---------- 布局骨架：迷你 / 展开 ---------- */
@@ -157,8 +172,8 @@ html, body {
   flex-shrink: 0;
   transition: color 0.4s ease;
 }
-.app[data-phase="short_break"] .pill-phase { color: var(--break); }
-.app[data-phase="long_break"] .pill-phase { color: var(--long); }
+.app[data-phase="short_break"] .pill-phase { color: var(--break-text); }
+.app[data-phase="long_break"] .pill-phase { color: var(--long-text); }
 
 .pill-time {
   flex: 1;
@@ -227,25 +242,35 @@ html, body {
   top: 0;
   /* 固定自然尺寸预布局：morph 期间被卡片 overflow 裁切，内容零形变 */
   width: 340px;
-  /* v11：456→467（抽屉加快捷键卡，与 main.ts PANEL_H 同步，两处必须同改） */
+  /* v11：456→467（抽屉加快捷键卡，与 morph.ts PANEL_H 同步，两处必须同改） */
   height: 467px;
   display: flex;
   flex-direction: column;
   padding: 20px 18px 14px;
   gap: 14px;
-  /* 收起时快速淡出（旧内容先走） */
-  opacity: 0;
+  opacity: 1;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.1s ease-out, visibility 0s 0.1s;
+  transition: visibility 0s linear 0.28s;
 }
 .app.expanded .panel {
-  /* 展开时延迟淡入（新内容后到；时间数字另有 FLIP 连续形变叠加）。
-     v17c：0.24s/0.12s 与 340ms 主曲线同呼吸——淡入不再中途完成显得突兀 */
-  opacity: 1;
   visibility: visible;
   pointer-events: auto;
-  transition: opacity 0.24s ease-out 0.12s, visibility 0s;
+  transition: visibility 0s linear;
+}
+.panel > :not(.panel-head),
+.panel-phase,
+.progress-track,
+.cycle-dots {
+  opacity: 0;
+  transition: opacity 0.1s ease-out;
+}
+.app.expanded .panel > :not(.panel-head),
+.app.expanded .panel-phase,
+.app.expanded .progress-track,
+.app.expanded .cycle-dots {
+  opacity: 1;
+  transition: opacity 0.24s ease-out 0.12s;
 }
 
 .panel-head { text-align: center; cursor: grab; position: relative; }
@@ -259,8 +284,8 @@ html, body {
   color: var(--work-text); /* v8③：同 pill-phase */
   transition: color 0.4s ease;
 }
-.app[data-phase="short_break"] .panel-phase { color: var(--break); }
-.app[data-phase="long_break"] .panel-phase { color: var(--long); }
+.app[data-phase="short_break"] .panel-phase { color: var(--break-text); }
+.app[data-phase="long_break"] .panel-phase { color: var(--long-text); }
 
 .panel-time {
   font-size: 56px;
@@ -337,7 +362,7 @@ html, body {
   transition: filter 0.18s ease, background-color 0.2s ease;
 }
 [data-theme="dark"] .btn { color: rgba(255, 255, 255, 0.85); }
-[data-theme="dark"] .btn-primary { color: #fff; }
+[data-theme="dark"] .btn-primary { color: var(--on-phase); }
 .btn:hover { filter: brightness(0.96); }
 .btn:active { filter: brightness(0.88); transition-duration: 0.06s; }
 [data-theme="dark"] .btn:hover { filter: brightness(1.15); }
@@ -345,7 +370,7 @@ html, body {
 
 .btn-primary {
   background: var(--work);
-  color: #fff;
+  color: var(--on-phase);
   font-weight: 600;
 }
 .app[data-phase="short_break"] .btn-primary { background: var(--break); }
@@ -805,7 +830,7 @@ html, body {
   font-weight: 600;
   /* 评审 P3 修：跟随当前编辑的阶段色（而非恒专注红）——悬停预览时同步变色 */
   background: var(--cp-hue-color, var(--work));
-  color: #fff;
+  color: var(--on-phase);
   cursor: pointer;
   flex-shrink: 0;
   transition: filter 0.18s ease;
@@ -1200,7 +1225,7 @@ body.mock-preview .app {
 [data-theme="dark"][data-material="liquid_glass"] .btn-primary {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 42%), var(--work);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35), inset 0 -1px 1.5px rgba(0, 0, 0, 0.12);
-  color: #fff;
+  color: var(--on-phase);
 }
 [data-theme="dark"][data-material="liquid_glass"] .stepper,
 [data-theme="dark"][data-material="liquid_glass"] .setting-input input,
@@ -1302,6 +1327,14 @@ body.mock-preview .app {
   [data-material="liquid_glass"] .app {
     box-shadow: inset 0 0 0 1px var(--text);
   }
+}
+
+.stepper-val input:focus-visible,
+.color-hex:focus-visible,
+.cp-hex:focus-visible,
+.hotkey-cap:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ---------- v11 托盘菜单页：菜单即窗口内容 ----------
