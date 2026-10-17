@@ -130,20 +130,55 @@ impl AppConfig {
     }
 }
 
+fn scrub_bad_field<T: serde::de::DeserializeOwned>(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) {
+    let Some(value) = obj.get(key) else { return };
+    if serde_json::from_value::<T>(value.clone()).is_err() {
+        eprintln!("[config] 字段 {key} 无法解析，该字段回默认，其余保留");
+        obj.remove(key);
+    }
+}
+
 impl AppConfig {
-    /// 与 TimerConfig::load 同策略：文件缺失/损坏回默认（不崩），缺字段补默认
+    /// 文件缺失或整份不是 JSON 时回默认。单个字段类型不对时丢掉该字段，其余保留。
     pub fn load(path: &std::path::Path) -> Self {
-        match std::fs::read_to_string(path) {
-            // 08-18 P2-2：单字段类型错会整份回默认——至少留日志，用户配置"消失"可追溯
-            Ok(s) => {
-                let mut cfg: Self = serde_json::from_str(&s).unwrap_or_else(|e| {
-                    eprintln!("[config] 应用配置解析失败，回默认（{e}）");
-                    Self::default()
-                });
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Self::default();
+        };
+        if let Ok(mut cfg) = serde_json::from_str::<Self>(&text) {
+            cfg.normalize();
+            return cfg;
+        }
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            eprintln!("[config] 应用配置不是 JSON，回默认");
+            return Self::default();
+        };
+        let Some(obj) = value.as_object_mut() else {
+            eprintln!("[config] 应用配置不是对象，回默认");
+            return Self::default();
+        };
+        scrub_bad_field::<u64>(obj, "work_ms");
+        scrub_bad_field::<u64>(obj, "short_break_ms");
+        scrub_bad_field::<u64>(obj, "long_break_ms");
+        scrub_bad_field::<u32>(obj, "long_break_every");
+        scrub_bad_field::<bool>(obj, "auto_start_next");
+        scrub_bad_field::<u32>(obj, "daily_goal");
+        scrub_bad_field::<Material>(obj, "material");
+        scrub_bad_field::<HotkeyConfig>(obj, "hotkey");
+        scrub_bad_field::<Colors>(obj, "colors");
+        scrub_bad_field::<Theme>(obj, "theme");
+        scrub_bad_field::<u32>(obj, "completed_work_count");
+        match serde_json::from_value::<Self>(value) {
+            Ok(mut cfg) => {
                 cfg.normalize();
                 cfg
             }
-            Err(_) => Self::default(),
+            Err(e) => {
+                eprintln!("[config] 应用配置解析失败，回默认（{e}）");
+                Self::default()
+            }
         }
     }
 
@@ -324,9 +359,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// hotkey 字段类型错误（如 "hotkey": 123）→ 与整文件损坏同策略：整体回默认不崩
+    /// hotkey 字段类型错误时只丢掉热键，时长和自动开始仍保留
     #[test]
-    fn corrupt_hotkey_field_falls_back_to_default() {
+    fn corrupt_hotkey_field_keeps_timer() {
         let dir = tmpdir("hotkey-corrupt");
         let path = dir.join("config.json");
         std::fs::write(
@@ -336,7 +371,9 @@ mod tests {
         )
         .unwrap();
         let loaded = AppConfig::load(&path);
-        assert_eq!(loaded, AppConfig::default());
+        assert_eq!(loaded.timer.work_ms, 30 * MIN);
+        assert!(loaded.timer.auto_start_next);
+        assert_eq!(loaded.hotkey, HotkeyConfig::default());
         std::fs::remove_dir_all(&dir).ok();
     }
 

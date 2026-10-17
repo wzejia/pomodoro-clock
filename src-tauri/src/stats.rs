@@ -184,7 +184,7 @@ impl StatsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{Datelike, TimeZone};
 
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
         Local
@@ -233,9 +233,15 @@ mod tests {
         s.add_record(t_t + 60, 25 * 60);
         let sum = s.summary(now);
         assert_eq!(sum.today_count, 2);
-        // 周视图里两天各在其位
+        let today_idx = today.weekday().num_days_from_monday() as usize;
+        assert_eq!(sum.week[today_idx].count, 2);
         let total_week: u32 = sum.week.iter().map(|b| b.count).sum();
-        assert_eq!(total_week, 3);
+        if today_idx == 0 {
+            assert_eq!(total_week, 2);
+        } else {
+            assert_eq!(sum.week[today_idx - 1].count, 1);
+            assert_eq!(total_week, 3);
+        }
     }
 
     #[test]

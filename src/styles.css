@@ -188,7 +188,7 @@ input:focus-visible {
 }
 
 .app[data-status="paused"] .pill-time,
-.app[data-status="paused"] .panel-time { opacity: 0.45; transition: opacity 0.3s ease; }
+.app[data-status="paused"] .panel-time { opacity: 0.45; }
 
 /* ---------- v11 胶囊底部 2px 进度条 ----------
    贴底边（bottom:0），左右 26px inset 对齐胶囊底边平段（R38 圆角在底部 2px 处弦宽约 168px），

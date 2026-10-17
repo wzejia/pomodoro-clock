@@ -64,10 +64,8 @@ export function closeDrawer() {
 
 export async function openSettings() {
   hideMenu();
-  if (!isExpanded()) {
-    void setExpanded(true);
-    await whenPresented();
-  }
+  if (!isExpanded()) void setExpanded(true);
+  await whenPresented();
   if (!isExpanded()) return;
   drawerOpen = true;
   app.classList.add("drawer-open");

@@ -55,6 +55,12 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn save_config(state: &AppState) {
+    if let Err(e) = current_appconfig(state).save(&config_path()) {
+        eprintln!("[config] 保存失败: {e}");
+    }
+}
+
 fn emit_snapshot(app: &AppHandle, snap: &TimerSnapshot) {
     let _ = app.emit("timer-tick", TickPayload { snapshot: snap.clone() });
 }
@@ -81,8 +87,10 @@ fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseComplet
     if ev.from == Phase::Work {
         let mut stats = state.stats.lock().unwrap();
         stats.add_record(chrono::Local::now().timestamp(), work_secs);
-        let _ = stats.save(&stats_path());
-        let _ = current_appconfig(state).save(&config_path());
+        if let Err(e) = stats.save(&stats_path()) {
+            eprintln!("[stats] 保存失败: {e}");
+        }
+        save_config(state);
     }
     let short_min = (cfg.short_break_ms / 60_000).max(1);
     let long_min = (cfg.long_break_ms / 60_000).max(1);
@@ -184,7 +192,7 @@ fn set_config(
         t.apply_prefs(cfg);
         t.snapshot()
     };
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
     emit_snapshot(&app, &snap);
     snap
 }
@@ -198,7 +206,7 @@ fn get_config(state: State<AppState>) -> AppConfig {
 #[tauri::command]
 fn set_material(state: State<AppState>, material: Material) {
     *state.material.lock().unwrap() = material;
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
 }
 
 /// 三阶段自定义配色（08-16 v16）：同 set_material 模式——只动 UI 不动计时；
@@ -207,7 +215,7 @@ fn set_material(state: State<AppState>, material: Material) {
 fn set_colors(state: State<AppState>, colors: appconfig::Colors) -> Result<(), String> {
     colors.validate()?;
     *state.colors.lock().unwrap() = colors;
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
     Ok(())
 }
 
@@ -234,7 +242,7 @@ fn current_appconfig(state: &AppState) -> AppConfig {
 #[tauri::command]
 fn set_theme(state: State<AppState>, theme: Theme) {
     *state.theme.lock().unwrap() = theme;
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
 }
 
 fn current_hotkey_state(state: &AppState) -> HotkeyState {
@@ -278,7 +286,7 @@ fn set_hotkey(
         *state.hotkey_effective.lock().unwrap() = None;
     }
     *state.hotkey.lock().unwrap() = HotkeyConfig { enabled, shortcut: want };
-    let _ = current_appconfig(&state).save(&config_path());
+    save_config(&state);
     Ok(current_hotkey_state(&state))
 }
 

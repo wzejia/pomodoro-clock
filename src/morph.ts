@@ -332,6 +332,7 @@ async function applyReduced(v: boolean, gen: number) {
   setMode(false);
   panelTime.style.visibility = "hidden";
   commitBox(MINI_W, MINI_H);
+  releasePresented();
   await enqueueGeom(() => bridge.morphCommit(MINI_W, MINI_H));
   if (gen !== morphGen) return;
   commitBox(MINI_W, MINI_H);
@@ -352,7 +353,10 @@ export async function setExpanded(v: boolean): Promise<void> {
   const interrupted = held !== null;
   if (v) {
     const [dx, dy] = await enqueueGeom(() => bridge.morphBegin(PANEL_W, PANEL_H));
-    if (gen !== morphGen) return;
+    if (gen !== morphGen) {
+      releasePresented();
+      return;
+    }
     setMode(true);
     launch(gen, true, from, interrupted, dx, dy, measureGlyph(from.nx, from.ny, from.ns));
   } else {
