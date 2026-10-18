@@ -55,7 +55,7 @@ bun run tauri build    # 产出 NSIS 安装包
 
 非 Windows 上如果要看界面，窗口展开的防出屏和托盘菜单位置会走 Tauri 的显示器工作区。系统没有报告任何显示器时，才回退到 1920×1080。拖拽跟随光标只在 Windows 实现。
 
-测试：`cd src-tauri && cargo test --lib`（74 个），前端 `bun test`。CI 在 Ubuntu 上跑 Rust 与前端，并在 `windows-latest` 上编译运行 `cargo test --lib`，用来覆盖 `cfg(windows)` 代码。
+测试：`cd src-tauri && cargo test --lib`（81 个），前端 `bun test`。CI 在 Ubuntu 上跑 Rust 与前端，并在 `windows-latest` 上编译运行 `cargo test --lib`，用来覆盖 `cfg(windows)` 代码。
 
 ## 结构
 

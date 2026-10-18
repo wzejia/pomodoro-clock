@@ -74,30 +74,36 @@ impl StatsStore {
             Ok(s) => s,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
             Err(e) => {
-                eprintln!("[stats] 读取失败（{e}），内存用空库，不改写原文件");
-                return Self::default();
+                eprintln!("[stats] 读取失败（{e}），尝试把原文件备份后再放弃");
+                return Self::after_failed_read(path);
             }
         };
         match serde_json::from_str::<Self>(&text) {
             Ok(store) => store,
-            Err(e) => match crate::atomic_file::quarantine_corrupt(path) {
-                Ok(dest) => {
-                    eprintln!(
-                        "[stats] 解析失败（{e}），已备份到 {}，不会用空库覆盖原历史",
-                        dest.display()
-                    );
-                    Self::default()
+            Err(e) => {
+                eprintln!("[stats] 解析失败（{e}）");
+                Self::after_failed_read(path)
+            }
+        }
+    }
+
+    /// 读不出或解析不了时，先把原字节挪走。挪不走就拒绝以后的 save。
+    fn after_failed_read(path: &Path) -> Self {
+        match crate::atomic_file::quarantine_corrupt(path) {
+            Ok(dest) => {
+                eprintln!(
+                    "[stats] 已备份到 {}，不会用空库覆盖原历史",
+                    dest.display()
+                );
+                Self::default()
+            }
+            Err(be) => {
+                eprintln!("[stats] 备份失败（{be}）。拒绝之后用空库覆盖原文件");
+                Self {
+                    quarantine_failed: true,
+                    ..Self::default()
                 }
-                Err(be) => {
-                    eprintln!(
-                        "[stats] 解析失败（{e}），备份也失败（{be}）。拒绝之后用空库覆盖原文件"
-                    );
-                    Self {
-                        quarantine_failed: true,
-                        ..Self::default()
-                    }
-                }
-            },
+            }
         }
     }
 
@@ -397,6 +403,48 @@ mod tests {
         assert!(saved.contains("\"records\""));
         assert!(!saved.contains("not valid"));
         assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), original);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unreadable_bytes_are_backed_up_before_empty_save() {
+        let dir = std::env::temp_dir().join(format!("pomodoro-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stats.json");
+        let original = vec![0xFFu8, 0xFE, 0x00, 0x41];
+        std::fs::write(&path, &original).unwrap();
+        let s = StatsStore::load(&path);
+        assert!(s.records.is_empty());
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read(backups[0].path()).unwrap(), original);
+        s.save(&path).unwrap();
+        assert_eq!(std::fs::read(backups[0].path()).unwrap(), original);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("records"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_refuses_when_backup_failed_and_keeps_bytes() {
+        let dir = std::env::temp_dir().join(format!("pomodoro-nobackup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stats.json");
+        let original = b"{ not valid json !!!";
+        std::fs::write(&path, original).unwrap();
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&dir, perms).unwrap();
+        let loaded = StatsStore::load(&path);
+        let save_result = loaded.save(&path);
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_readonly(false);
+        std::fs::set_permissions(&dir, perms).unwrap();
+        assert!(save_result.is_err(), "备份失败后必须拒绝保存");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_dir_all(&dir).ok();
     }
 

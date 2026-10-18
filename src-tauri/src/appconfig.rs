@@ -164,23 +164,41 @@ fn scrub_bad_field<T: serde::de::DeserializeOwned>(
     }
 }
 
+pub struct ConfigLoad {
+    pub config: AppConfig,
+    /// 原文件还在，且没能备份。调用方不得 save。
+    pub save_blocked: bool,
+}
+
 impl AppConfig {
     /// 文件缺失或整份不是 JSON 时回默认。单个字段类型不对时丢掉该字段，其余保留。
     pub fn load(path: &std::path::Path) -> Self {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Self::default();
+        Self::load_reported(path).config
+    }
+
+    /// `save_blocked` 为真时，调用方不得把内存里的默认配置写回原路径。
+    pub fn load_reported(path: &std::path::Path) -> ConfigLoad {
+        let text = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return ConfigLoad { config: Self::default(), save_blocked: false };
+            }
+            Err(e) => {
+                eprintln!("[config] 读取失败（{e}）");
+                return Self::quarantine_whole(path);
+            }
         };
         if let Ok(mut cfg) = serde_json::from_str::<Self>(&text) {
             cfg.normalize();
-            return cfg;
+            return ConfigLoad { config: cfg, save_blocked: false };
         }
         let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            eprintln!("[config] 应用配置不是 JSON，回默认");
-            return Self::default();
+            eprintln!("[config] 应用配置不是 JSON");
+            return Self::quarantine_whole(path);
         };
         let Some(obj) = value.as_object_mut() else {
-            eprintln!("[config] 应用配置不是对象，回默认");
-            return Self::default();
+            eprintln!("[config] 应用配置不是对象");
+            return Self::quarantine_whole(path);
         };
         scrub_bad_field::<u64>(obj, "work_ms");
         scrub_bad_field::<u64>(obj, "short_break_ms");
@@ -198,11 +216,24 @@ impl AppConfig {
         match serde_json::from_value::<Self>(value) {
             Ok(mut cfg) => {
                 cfg.normalize();
-                cfg
+                ConfigLoad { config: cfg, save_blocked: false }
             }
             Err(e) => {
-                eprintln!("[config] 应用配置解析失败，回默认（{e}）");
-                Self::default()
+                eprintln!("[config] 应用配置解析失败（{e}）");
+                Self::quarantine_whole(path)
+            }
+        }
+    }
+
+    fn quarantine_whole(path: &std::path::Path) -> ConfigLoad {
+        match crate::atomic_file::quarantine_corrupt(path) {
+            Ok(dest) => {
+                eprintln!("[config] 已备份到 {}，不会用默认配置覆盖原文件", dest.display());
+                ConfigLoad { config: Self::default(), save_blocked: false }
+            }
+            Err(e) => {
+                eprintln!("[config] 备份失败（{e}）。拒绝用默认配置覆盖原文件");
+                ConfigLoad { config: Self::default(), save_blocked: true }
             }
         }
     }
@@ -255,6 +286,7 @@ mod tests {
                 status: crate::timer::Status::Paused,
                 phase_total_ms: 30 * MIN,
                 remaining_ms: 12 * MIN,
+                pause_reason: None,
             }),
         };
         cfg.save(&path).unwrap();
@@ -472,6 +504,45 @@ mod tests {
         assert!(loaded.timer.auto_start_next);
         assert_eq!(loaded.session, None);
         assert_eq!(loaded.version, SCHEMA_VERSION);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn whole_config_corrupt_is_backed_up_not_overwritten() {
+        let dir = tmpdir("whole-corrupt");
+        let path = dir.join("config.json");
+        let original = "{ not valid json !!!";
+        std::fs::write(&path, original).unwrap();
+        let loaded = AppConfig::load_reported(&path);
+        assert_eq!(loaded.config.material, Material::LiquidGlass);
+        assert!(!loaded.save_blocked);
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), original);
+        loaded.config.save(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), original);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_save_blocks_when_backup_fails() {
+        let dir = tmpdir("cfg-nobackup");
+        let path = dir.join("config.json");
+        let original = b"{ not valid json !!!";
+        std::fs::write(&path, original).unwrap();
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&dir, perms).unwrap();
+        let loaded = AppConfig::load_reported(&path);
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_readonly(false);
+        std::fs::set_permissions(&dir, perms).unwrap();
+        assert!(loaded.save_blocked, "备份失败时必须禁止覆盖");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_dir_all(&dir).ok();
     }
 }
