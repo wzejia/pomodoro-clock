@@ -5,13 +5,24 @@ use std::time::Instant;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::timer::Sample;
+use crate::timer::{Phase, Sample, TimerSnapshot};
 use crate::{mono_ms, on_phase_completed, persist, wall_ms, AppState, TickPayload};
+
+fn tray_tip(snap: &TimerSnapshot) -> String {
+    let total = snap.remaining_ms / 1000;
+    let phase = match snap.phase {
+        Phase::Work => "专注",
+        Phase::ShortBreak => "短休息",
+        Phase::LongBreak => "长休息",
+    };
+    format!("{phase} {:02}:{:02}", total / 60, total % 60)
+}
 
 /// 250ms 一拍。刷盘期间不采样。间隔异常由 sample 暂停。
 pub fn spawn(handle: AppHandle) {
     std::thread::spawn(move || {
         let mut last_checkpoint = Instant::now();
+        let mut last_tip = String::new();
         loop {
             std::thread::sleep(std::time::Duration::from_millis(250));
             let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -27,6 +38,13 @@ pub fn spawn(handle: AppHandle) {
                     let sample = t.sample(mono_ms(), wall_ms());
                     let snap = t.snapshot();
                     drop(t);
+                    let tip = tray_tip(&snap);
+                    if tip != last_tip {
+                        if let Some(tray) = handle.tray_by_id("main-tray") {
+                            let _ = tray.set_tooltip(Some(tip.clone()));
+                        }
+                        last_tip = tip;
+                    }
                     let _ = handle.emit("timer-tick", TickPayload { snapshot: snap });
                     sample
                 };

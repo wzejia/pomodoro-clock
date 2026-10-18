@@ -23,7 +23,8 @@ const chartCeil = (v: number) => Math.ceil(Math.max(1, v) * 1.25);
 
 export async function refreshStats() {
   const sum = (await bridge.invoke("stats_summary")) as StatsSummary;
-  $("stat-today-count").textContent = String(sum.today_count);
+  const goal = getSnapshot()?.daily_goal ?? 8;
+  $("stat-today-count").textContent = `${sum.today_count} / ${goal}`;
   $("stat-today-min").textContent = String(sum.today_minutes);
   $("stat-streak").textContent = String(sum.streak_days);
   if (statsRange !== "week") return;
@@ -31,12 +32,14 @@ export async function refreshStats() {
   const chart = $("week-chart");
   chart.replaceChildren();
   const goalVal = goalStatVal();
-  const chartMax = chartCeil(Math.max(goalVal, ...sum.week.map(statVal)));
-  const goalLine = document.createElement("div");
-  goalLine.className = "goal-line";
-  goalLine.style.bottom = `${26 + (goalVal / chartMax) * 40}px`;
-  goalLine.title = `每日目标：${goalVal} ${statUnitLabel()}`;
-  chart.append(goalLine);
+  const chartMax = chartCeil(Math.max(statsUnit === "count" ? goalVal : 0, ...sum.week.map(statVal)));
+  if (statsUnit === "count") {
+    const goalLine = document.createElement("div");
+    goalLine.className = "goal-line";
+    goalLine.style.bottom = `${26 + (goalVal / chartMax) * 40}px`;
+    goalLine.title = `每日目标：${goalVal} ${statUnitLabel()}`;
+    chart.append(goalLine);
+  }
   const todayStr = new Date().toLocaleDateString("sv-SE");
   sum.week.forEach((b, i) => {
     const v = statVal(b);

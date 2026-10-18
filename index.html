@@ -12,14 +12,14 @@
       <!-- 迷你胶囊 -->
       <div id="pill" class="pill">
         <span id="pill-phase" class="pill-phase">专注</span>
-        <span id="pill-time" class="pill-time">25:00</span>
+        <span id="pill-time" class="pill-time" aria-live="polite" aria-atomic="true">25:00</span>
         <button id="btn-toggle-run" class="icon-btn" title="开始/暂停" aria-label="开始或暂停">
           <svg id="icon-play" viewBox="0 0 16 16" width="15" height="15"><path d="M4 2.5v11l9-5.5z" fill="currentColor"/></svg>
           <svg id="icon-pause" viewBox="0 0 16 16" width="15" height="15" style="display:none"><path d="M3.5 2.5h3.2v11H3.5zM9.3 2.5h3.2v11H9.3z" fill="currentColor"/></svg>
         </button>
         <!-- v11：胶囊底部 2px 进度条（snapshot remaining/total 驱动，前端不自算）；
              左右 26px inset = 胶囊底边平段弦长（半径38圆角外区域不可见） -->
-        <div class="pill-progress" aria-hidden="true"><div id="pill-progress-bar"></div></div>
+        <div class="pill-progress" role="progressbar" aria-label="本阶段进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="pill-progress-bar"></div></div>
       </div>
 
       <!-- 展开面板 -->
@@ -27,9 +27,11 @@
         <header id="panel-head" class="panel-head">
           <div class="panel-timer">
             <div id="panel-phase" class="panel-phase">专注</div>
-            <div id="panel-time" class="panel-time">25:00</div>
-            <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+            <div id="panel-time" class="panel-time" aria-live="polite" aria-atomic="true">25:00</div>
+            <p id="pause-note" class="pause-note" hidden></p>
+            <div class="progress-track" role="progressbar" aria-label="本阶段进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar" class="progress-bar"></div></div>
             <div id="cycle-dots" class="cycle-dots" aria-label="本组番茄进度"></div>
+            <input id="focus-label" class="focus-label" type="text" maxlength="40" placeholder="正在做（可选）" aria-label="正在做" />
           </div>
         </header>
 
@@ -46,7 +48,7 @@
           <div class="stat-cards">
             <div class="stat-card">
               <div id="stat-today-count" class="stat-num">0</div>
-              <div class="stat-label">今日番茄</div>
+              <div class="stat-label">今日 / 目标</div>
             </div>
             <div class="stat-card">
               <div id="stat-today-min" class="stat-num">0</div>
@@ -96,25 +98,25 @@
               <div class="setting-row">
                 <span>工作</span>
                 <span class="stepper">
-                  <button class="step-btn" data-step="work:-1" aria-label="减少">−</button>
-                  <span class="stepper-val"><input id="input-work" type="number" inputmode="numeric" min="1" max="120" value="25" /></span>
-                  <button class="step-btn" data-step="work:1" aria-label="增加">+</button>
+                  <button class="step-btn" data-step="work:-1" aria-label="减少工作时长">−</button>
+                  <span class="stepper-val"><input id="input-work" type="number" inputmode="numeric" min="1" max="120" value="25" aria-label="工作时长（分钟）" /></span>
+                  <button class="step-btn" data-step="work:1" aria-label="增加工作时长">+</button>
                 </span>
               </div>
               <div class="setting-row">
                 <span>短休息</span>
                 <span class="stepper">
-                  <button class="step-btn" data-step="short:-1" aria-label="减少">−</button>
-                  <span class="stepper-val"><input id="input-short" type="number" inputmode="numeric" min="1" max="60" value="5" /></span>
-                  <button class="step-btn" data-step="short:1" aria-label="增加">+</button>
+                  <button class="step-btn" data-step="short:-1" aria-label="减少短休息时长">−</button>
+                  <span class="stepper-val"><input id="input-short" type="number" inputmode="numeric" min="1" max="60" value="5" aria-label="短休息时长（分钟）" /></span>
+                  <button class="step-btn" data-step="short:1" aria-label="增加短休息时长">+</button>
                 </span>
               </div>
               <div class="setting-row">
                 <span>长休息</span>
                 <span class="stepper">
-                  <button class="step-btn" data-step="long:-1" aria-label="减少">−</button>
-                  <span class="stepper-val"><input id="input-long" type="number" inputmode="numeric" min="1" max="60" value="15" /></span>
-                  <button class="step-btn" data-step="long:1" aria-label="增加">+</button>
+                  <button class="step-btn" data-step="long:-1" aria-label="减少长休息时长">−</button>
+                  <span class="stepper-val"><input id="input-long" type="number" inputmode="numeric" min="1" max="60" value="15" aria-label="长休息时长（分钟）" /></span>
+                  <button class="step-btn" data-step="long:1" aria-label="增加长休息时长">+</button>
                 </span>
               </div>
             </div>
@@ -123,9 +125,9 @@
               <div class="setting-row">
                 <span>长休间隔（个）</span>
                 <span class="stepper">
-                  <button class="step-btn" data-step="every:-1" aria-label="减少">−</button>
-                  <span class="stepper-val"><input id="input-every" type="number" inputmode="numeric" min="2" max="10" value="4" /></span>
-                  <button class="step-btn" data-step="every:1" aria-label="增加">+</button>
+                  <button class="step-btn" data-step="every:-1" aria-label="减少长休间隔">−</button>
+                  <span class="stepper-val"><input id="input-every" type="number" inputmode="numeric" min="2" max="10" value="4" aria-label="长休间隔（个）" /></span>
+                  <button class="step-btn" data-step="every:1" aria-label="增加长休间隔">+</button>
                 </span>
               </div>
               <!-- 08-16：每日目标（默认 8 个）——周柱/月格刻度锚点 + 周图目标虚线；分钟口径自动换算=个数×工作时长。
@@ -133,14 +135,25 @@
               <div class="setting-row">
                 <span>每日目标（个）</span>
                 <span class="stepper">
-                  <button class="step-btn" data-step="goal:-1" aria-label="减少">−</button>
-                  <span class="stepper-val"><input id="input-goal" type="number" inputmode="numeric" min="1" max="20" value="8" /></span>
-                  <button class="step-btn" data-step="goal:1" aria-label="增加">+</button>
+                  <button class="step-btn" data-step="goal:-1" aria-label="减少每日目标">−</button>
+                  <span class="stepper-val"><input id="input-goal" type="number" inputmode="numeric" min="1" max="20" value="8" aria-label="每日目标（个）" /></span>
+                  <button class="step-btn" data-step="goal:1" aria-label="增加每日目标">+</button>
                 </span>
               </div>
               <div class="setting-row toggle-row">
                 <span>自动开始下一阶段</span>
-                <button id="toggle-auto-start" class="toggle" role="switch" aria-checked="false">
+                <button id="toggle-auto-start" class="toggle" role="switch" aria-checked="false" aria-label="自动开始下一阶段">
+                  <span class="toggle-knob"></span>
+                </button>
+              </div>
+              <div class="setting-row">
+                <span>导出</span>
+                <button id="btn-export" class="btn" type="button">导出统计</button>
+              </div>
+              <p id="export-path" class="export-path" hidden></p>
+              <div class="setting-row toggle-row">
+                <span>完成提示音</span>
+                <button id="toggle-sound" class="toggle on" role="switch" aria-checked="true" aria-label="完成提示音">
                   <span class="toggle-knob"></span>
                 </button>
               </div>

@@ -3,7 +3,7 @@ import { bindChrome, hideMenu, openSettings, syncInert } from "./chrome";
 import { bindMorph } from "./morph";
 import { runLabel } from "./menu";
 import { bindSession, getSnapshot, render, resetPhase, toggleRun } from "./session";
-import { bindSettings, dismissSettingsLayers, loadConfig } from "./settings";
+import { bindSettings, dismissSettingsLayers, isSoundEnabled, loadConfig } from "./settings";
 import { bindStats, refreshStats, refreshVisible } from "./stats-view";
 
 window.addEventListener("error", (e) => {
@@ -22,6 +22,7 @@ let askedNotify = false;
 
 let chimeCtx: AudioContext | null = null;
 function playChime() {
+  if (!isSoundEnabled()) return;
   try {
     chimeCtx ??= new AudioContext();
     const ctx = chimeCtx;
@@ -83,7 +84,7 @@ ctxAutostart.addEventListener("click", async (e) => {
 $("ctx-quit").addEventListener("click", () => { bridge.invoke("quit_app"); });
 
 bridge.onPhaseCompleted(() => {
-  playChime();
+  if (bridge.isMock) playChime();
   refreshVisible();
   if (!askedNotify) {
     askedNotify = true;

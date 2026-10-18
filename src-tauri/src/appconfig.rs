@@ -11,6 +11,10 @@ fn schema_version() -> u32 {
     SCHEMA_VERSION
 }
 
+fn sound_on() -> bool {
+    true
+}
+
 /// 界面材质：经典（实心毛玻璃拟态，v6 观感）/ 液态玻璃（iOS 26 拟态，默认）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -119,6 +123,9 @@ pub struct AppConfig {
     pub theme: Theme,
     /// 本组已完成的工作番茄。今日个数在 stats.json，这是圆点和长休间隔的进度。
     pub completed_work_count: u32,
+    /// 完成提示音。旧文件没有该字段时保持开启。
+    #[serde(default = "sound_on")]
+    pub sound_enabled: bool,
     /// 进行中的阶段。旧文件没有该字段时为 None，启动不恢复。
     #[serde(default)]
     pub session: Option<TimerSession>,
@@ -134,6 +141,7 @@ impl Default for AppConfig {
             colors: Colors::default(),
             theme: Theme::default(),
             completed_work_count: 0,
+            sound_enabled: true,
             session: None,
         }
     }
@@ -211,6 +219,7 @@ impl AppConfig {
         scrub_bad_field::<Colors>(obj, "colors");
         scrub_bad_field::<Theme>(obj, "theme");
         scrub_bad_field::<u32>(obj, "completed_work_count");
+        scrub_bad_field::<bool>(obj, "sound_enabled");
         scrub_bad_field::<u32>(obj, "version");
         scrub_bad_field::<TimerSession>(obj, "session");
         match serde_json::from_value::<Self>(value) {
@@ -281,12 +290,14 @@ mod tests {
             },
             theme: Theme::Dark,
             completed_work_count: 2,
+            sound_enabled: true,
             session: Some(TimerSession {
                 phase: crate::timer::Phase::Work,
                 status: crate::timer::Status::Paused,
                 phase_total_ms: 30 * MIN,
                 remaining_ms: 12 * MIN,
                 pause_reason: None,
+                focus_label: String::new(),
             }),
         };
         cfg.save(&path).unwrap();

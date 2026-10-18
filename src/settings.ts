@@ -7,6 +7,9 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 
 const toggleAutoStart = $("toggle-auto-start");
+const toggleSound = $("toggle-sound");
+let soundEnabled = true;
+export function isSoundEnabled() { return soundEnabled; }
 const hotkeyCap = $("hotkey-cap") as HTMLButtonElement;
 const hotkeyOff = $("hotkey-off") as HTMLButtonElement;
 
@@ -304,6 +307,9 @@ export async function loadConfig() {
   ($("input-goal") as HTMLInputElement).value = String(cfg.daily_goal);
   toggleAutoStart.setAttribute("aria-checked", String(cfg.auto_start_next));
   toggleAutoStart.classList.toggle("on", cfg.auto_start_next);
+  soundEnabled = cfg.sound_enabled !== false;
+  toggleSound.setAttribute("aria-checked", String(soundEnabled));
+  toggleSound.classList.toggle("on", soundEnabled);
   applyMaterial(cfg.material);
   const safeHex = (s: string | null | undefined) =>
     s && /^#[0-9a-fA-F]{6}$/.test(s) ? s.toLowerCase() : null;
@@ -408,6 +414,20 @@ export function bindSettings() {
     toggleAutoStart.setAttribute("aria-checked", String(on));
     toggleAutoStart.classList.toggle("on", on);
     applyConfig();
+  });
+  $("btn-export").addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const path = (await bridge.invoke("export_stats")) as string;
+    const note = $("export-path");
+    note.hidden = false;
+    note.textContent = path;
+  });
+  toggleSound.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    soundEnabled = toggleSound.getAttribute("aria-checked") !== "true";
+    toggleSound.setAttribute("aria-checked", String(soundEnabled));
+    toggleSound.classList.toggle("on", soundEnabled);
+    await bridge.invoke("set_sound", { enabled: soundEnabled });
   });
   for (const id of ["input-work", "input-short", "input-long", "input-every", "input-goal"]) {
     $(id).addEventListener("change", applyConfig);

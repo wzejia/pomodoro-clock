@@ -53,6 +53,7 @@ struct AppState {
     io_hold: AtomicBool,
     /// 原 config.json 还在且没能备份。禁止 save。
     config_blocked: AtomicBool,
+    sound_enabled: AtomicBool,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -141,8 +142,9 @@ fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseComplet
     // 崩溃发生在两次写入之间时，最多少记一笔，不会把同一轮再完成一次。
     persist(state, || {});
     if let Some(secs) = ev.stats_duration_secs() {
+        let label = state.timer.lock().unwrap().session().focus_label;
         let mut stats = state.stats.lock().unwrap();
-        stats.add_record(chrono::Local::now().timestamp(), secs);
+        stats.add_labeled(chrono::Local::now().timestamp(), secs, label);
         if let Err(e) = stats.save(&stats_path()) {
             eprintln!("[stats] 保存失败: {e}");
         }
@@ -150,15 +152,29 @@ fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseComplet
     let short_min = (cfg.short_break_ms / 60_000).max(1);
     let long_min = (cfg.long_break_ms / 60_000).max(1);
     let every = cfg.long_break_every.max(1);
+    let waiting = !cfg.auto_start_next;
     let (title, body) = match ev.to {
-        Phase::ShortBreak => ("专注完成 🍅".to_string(), format!("辛苦了，休息 {short_min} 分钟吧")),
-        Phase::LongBreak => (
-            "完成一组番茄 🎉".to_string(),
-            format!("连续 {every} 个番茄，长休息 {long_min} 分钟"),
+        Phase::ShortBreak if waiting => (
+            "专注完成".to_string(),
+            format!("休息 {short_min} 分钟还没开始"),
         ),
-        Phase::Work => ("休息结束".to_string(), "准备好开始下一段专注了吗".to_string()),
+        Phase::ShortBreak => ("专注完成".to_string(), format!("休息 {short_min} 分钟已开始")),
+        Phase::LongBreak if waiting => (
+            "完成一组番茄".to_string(),
+            format!("长休息 {long_min} 分钟还没开始"),
+        ),
+        Phase::LongBreak => (
+            "完成一组番茄".to_string(),
+            format!("连续 {every} 个番茄，长休息 {long_min} 分钟已开始"),
+        ),
+        Phase::Work if waiting => ("休息结束".to_string(), "下一段专注还没开始".to_string()),
+        Phase::Work => ("休息结束".to_string(), "下一段专注已开始".to_string()),
     };
-    let r = app.notification().builder().title(title).body(body).show();
+    let mut note = app.notification().builder().title(title).body(body);
+    if state.sound_enabled.load(Ordering::SeqCst) {
+        note = note.sound("Default");
+    }
+    let r = note.show();
     eprintln!("[notify] show result: {r:?}");
     // 08-18 P2-3：完成事件是前端 toast/统计刷新的唯一通知路径，emit 失败不得静默
     if let Err(e) = app.emit("phase-completed", ev) {
@@ -307,6 +323,7 @@ fn current_appconfig(state: &AppState) -> AppConfig {
         hotkey: state.hotkey.lock().unwrap().clone(),
         colors: state.colors.lock().unwrap().clone(),
         theme: *state.theme.lock().unwrap(),
+        sound_enabled: state.sound_enabled.load(Ordering::SeqCst),
         session: Some(timer.session()),
     }
 }
@@ -316,6 +333,31 @@ fn set_theme(state: State<AppState>, theme: Theme) {
     persist(&state, || {
         *state.theme.lock().unwrap() = theme;
     });
+}
+
+#[tauri::command]
+fn set_sound(state: State<AppState>, enabled: bool) {
+    persist(&state, || {
+        state.sound_enabled.store(enabled, Ordering::SeqCst);
+    });
+}
+
+#[tauri::command]
+fn set_focus_label(state: State<AppState>, label: String) -> TimerSnapshot {
+    let mut timer = state.timer.lock().unwrap();
+    timer.set_focus_label(label);
+    let snap = timer.snapshot();
+    drop(timer);
+    persist(&state, || {});
+    snap
+}
+
+#[tauri::command]
+fn export_stats(state: State<AppState>) -> Result<String, String> {
+    let path = stats_path().with_file_name("stats-export.json");
+    let stats = state.stats.lock().unwrap();
+    stats.save(&path).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
 }
 
 fn current_hotkey_state(state: &AppState) -> HotkeyState {
@@ -515,6 +557,7 @@ pub fn run() {
                 persist: Mutex::new(()),
                 io_hold: AtomicBool::new(false),
                 config_blocked: AtomicBool::new(loaded_config.save_blocked),
+                sound_enabled: AtomicBool::new(appcfg.sound_enabled),
             });
             if resume_as_paused {
                 eprintln!("[timer] 上次仍在计时，已恢复为暂停；退出期间不计入专注");
@@ -669,6 +712,9 @@ pub fn run() {
             set_material,
             set_colors,
             set_theme,
+            set_sound,
+            set_focus_label,
+            export_stats,
             get_hotkey,
             set_hotkey,
             stats_summary,

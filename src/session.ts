@@ -5,6 +5,12 @@ import { runLabel } from "./menu";
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 
+function pauseCopy(reason: TimerSnapshot["pause_reason"]): string {
+  if (reason === "gap") return "间隔异常，这段没有计入";
+  if (reason === "restored") return "已恢复，退出期间没有继续计时";
+  return "";
+}
+
 const app = $("app");
 const pillTime = $("pill-time");
 const panelTime = $("panel-time");
@@ -58,6 +64,23 @@ export function render(s: TimerSnapshot) {
   progressBar.style.minWidth = showBar ? "" : "0";
   pillProgressBar.style.width = `${(Math.max(0, Math.min(1, done)) * 100).toFixed(1)}%`;
 
+  const pct = String(Math.round(Math.max(0, Math.min(1, done)) * 100));
+  for (const track of [document.querySelector(".pill-progress"), document.querySelector(".progress-track")]) {
+    if (!track) continue;
+    track.setAttribute("aria-valuenow", pct);
+  }
+  const reason = s.status === "paused" ? pauseCopy(s.pause_reason) : "";
+  const note = $("pause-note");
+  note.hidden = reason.length === 0;
+  note.textContent = reason;
+  const spoken = reason ? `${time}，${reason}` : time;
+  pillTime.setAttribute("aria-label", spoken);
+  panelTime.setAttribute("aria-label", spoken);
+  const focusInput = $("focus-label") as HTMLInputElement;
+  if (document.activeElement !== focusInput && focusInput.value !== (s.focus_label ?? "")) {
+    focusInput.value = s.focus_label ?? "";
+  }
+
   const label = runLabel(s.status);
   const running = s.status === "running";
   iconPlay.style.display = running ? "none" : "";
@@ -109,6 +132,10 @@ export async function skipPhase() {
 
 export function bindSession() {
   bridge.onTick(render);
+  const focusInput = $("focus-label") as HTMLInputElement;
+  focusInput.addEventListener("change", async () => {
+    render((await bridge.invoke("set_focus_label", { label: focusInput.value })) as TimerSnapshot);
+  });
   $("btn-toggle-run").addEventListener("click", (e) => { e.stopPropagation(); toggleRun(); });
   $("btn-primary").addEventListener("click", () => toggleRun());
   $("btn-reset").addEventListener("click", () => resetPhase());

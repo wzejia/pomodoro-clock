@@ -11,6 +11,9 @@ pub struct PomodoroRecord {
     pub completed_at: i64,
     /// 本次专注时长（秒）
     pub duration_secs: u64,
+    /// 这一轮「正在做」的标题。旧记录没有该字段。
+    #[serde(default)]
+    pub focus_label: String,
 }
 
 fn schema_version() -> u32 {
@@ -121,9 +124,14 @@ impl StatsStore {
     }
 
     pub fn add_record(&mut self, completed_at: i64, duration_secs: u64) {
+        self.add_labeled(completed_at, duration_secs, "");
+    }
+
+    pub fn add_labeled(&mut self, completed_at: i64, duration_secs: u64, focus_label: impl Into<String>) {
         self.records.push(PomodoroRecord {
             completed_at,
             duration_secs,
+            focus_label: focus_label.into(),
         });
     }
 
@@ -338,12 +346,14 @@ mod tests {
         let path = dir.join("stats.json");
         let mut s = StatsStore::default();
         s.add_record(1_700_000_000, 1500);
-        s.add_record(1_700_003_600, 1500);
+        s.add_labeled(1_700_003_600, 1500, "写方案");
         s.save(&path).unwrap();
         let loaded = StatsStore::load(&path);
         assert_eq!(loaded.version, 1);
         assert_eq!(loaded.records.len(), 2);
         assert_eq!(loaded.records[0].completed_at, 1_700_000_000);
+        assert_eq!(loaded.records[0].focus_label, "");
+        assert_eq!(loaded.records[1].focus_label, "写方案");
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"version\": 1"));
         assert!(!path.with_extension("json.tmp").exists());

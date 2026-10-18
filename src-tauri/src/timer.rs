@@ -53,7 +53,7 @@ pub enum PauseReason {
 }
 
 /// 落盘的进行中阶段。重启时 Running 会改成 Paused，避免把关机时间算进番茄。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TimerSession {
     pub phase: Phase,
     pub status: Status,
@@ -62,6 +62,9 @@ pub struct TimerSession {
     /// 旧文件没有该字段时，暂停按手暂停理解。
     #[serde(default)]
     pub pause_reason: Option<PauseReason>,
+    /// 这一轮正在做的事。旧会话没有该字段。
+    #[serde(default)]
+    pub focus_label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -154,6 +157,7 @@ pub struct TimerSnapshot {
     pub work_ms: u64,
     /// 仅暂停时有值。
     pub pause_reason: Option<PauseReason>,
+    pub focus_label: String,
 }
 
 pub struct Timer {
@@ -169,6 +173,7 @@ pub struct Timer {
     last_wall_ms: u64,
     completed_work_count: u32,
     pause_reason: Option<PauseReason>,
+    focus_label: String,
 }
 
 impl Timer {
@@ -182,6 +187,7 @@ impl Timer {
             last_wall_ms: 0,
             completed_work_count: 0,
             pause_reason: None,
+            focus_label: String::new(),
             config,
         }
     }
@@ -193,7 +199,12 @@ impl Timer {
             phase_total_ms: self.phase_total_ms,
             remaining_ms: self.remaining_ms,
             pause_reason: self.pause_reason,
+            focus_label: self.focus_label.clone(),
         }
+    }
+
+    pub fn set_focus_label(&mut self, label: String) {
+        self.focus_label = label.trim().chars().take(40).collect();
     }
 
     /// 从磁盘恢复。Running 一律改成 Paused：退出到再次启动之间没有人在专注。
@@ -218,6 +229,7 @@ impl Timer {
         };
         self.last_tick_ms = 0;
         self.last_wall_ms = 0;
+        self.focus_label = session.focus_label;
     }
 
     /// 刷盘窗口结束。墙钟跳变超过阈值就暂停且不扣时；否则把锚点拨到现在，磁盘等待不算专注。
@@ -287,6 +299,7 @@ impl Timer {
             daily_goal: self.config.daily_goal,
             work_ms: self.config.work_ms,
             pause_reason: self.pause_reason,
+            focus_label: self.focus_label.clone(),
         }
     }
 
@@ -913,6 +926,7 @@ mod tests {
             phase_total_ms: 25 * MIN,
             remaining_ms: 10 * MIN,
             pause_reason: None,
+            focus_label: String::new(),
         });
         assert_eq!(t.snapshot().pause_reason, Some(PauseReason::Restored));
         let s = t.snapshot();
@@ -937,6 +951,7 @@ mod tests {
             phase_total_ms: 5 * MIN,
             remaining_ms: 90_000,
             pause_reason: Some(PauseReason::Gap),
+            focus_label: String::new(),
         });
         assert_eq!(paused.snapshot().pause_reason, Some(PauseReason::Gap));
         assert_eq!(paused.snapshot().status, Status::Paused);
@@ -950,6 +965,7 @@ mod tests {
             phase_total_ms: 15 * MIN,
             remaining_ms: 15 * MIN,
             pause_reason: None,
+            focus_label: String::new(),
         });
         assert_eq!(idle.snapshot().status, Status::Idle);
         assert_eq!(idle.snapshot().remaining_ms, 15 * MIN);

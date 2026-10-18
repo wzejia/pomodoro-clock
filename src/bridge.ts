@@ -15,6 +15,9 @@ export interface TimerSnapshot {
   long_break_every: number;
   daily_goal: number;
   work_ms: number;
+  /** 仅暂停时有值：user 手暂停，gap 睡眠或校时，restored 重启恢复 */
+  pause_reason?: "user" | "gap" | "restored" | null;
+  focus_label?: string;
 }
 
 export interface PhaseCompleted {
@@ -47,6 +50,7 @@ export interface TimerConfig {
   colors: PhaseColors;
   theme: ThemeName;
   completed_work_count: number;
+  sound_enabled: boolean;
   version: number;
   session: {
     phase: Phase;
@@ -149,6 +153,7 @@ function createMockBridge(): Bridge {
   let remaining = 12 * 60_000 + 34_000;
   let phaseTotal = 25 * 60_000;
   let completed = 2;
+  let focusLabel = "";
   let longEvery = 4;
   let goal = 8;
   let autoStart = false;
@@ -164,7 +169,7 @@ function createMockBridge(): Bridge {
   const snap = (): TimerSnapshot => ({
     phase, status, remaining_ms: remaining, total_ms: phaseTotal,
     completed_work_count: completed, long_break_every: longEvery,
-    daily_goal: goal, work_ms: durations.work,
+    daily_goal: goal, work_ms: durations.work, focus_label: focusLabel,
   });
   const enter = (next: Phase) => {
     phase = next;
@@ -223,6 +228,7 @@ function createMockBridge(): Bridge {
             hotkey: { enabled: hotkeyEnabled, shortcut: hotkeyShortcut },
             colors: { ...mockColors },
             theme, completed_work_count: completed,
+            sound_enabled: true,
             version: 1,
             session: {
               phase, status, phase_total_ms: phaseTotal, remaining_ms: remaining,
@@ -265,6 +271,9 @@ function createMockBridge(): Bridge {
         }
         case "get_autostart": return false;
         case "set_autostart": return args?.enabled ?? false;
+        case "set_sound": return null;
+        case "set_focus_label": focusLabel = String(args?.label ?? ""); return snap();
+        case "export_stats": return "stats-export.json";
         case "quit_app": return null;
       }
       return null;
