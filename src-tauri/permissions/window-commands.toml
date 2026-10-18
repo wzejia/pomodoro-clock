@@ -1,0 +1,43 @@
+[[set]]
+identifier = "main-commands"
+description = "主窗口可调用的命令"
+permissions = [
+  "allow-timer-start",
+  "allow-timer-pause",
+  "allow-timer-resume",
+  "allow-timer-reset",
+  "allow-timer-skip",
+  "allow-timer-snapshot",
+  "allow-set-config",
+  "allow-get-config",
+  "allow-set-material",
+  "allow-set-colors",
+  "allow-set-theme",
+  "allow-get-hotkey",
+  "allow-set-hotkey",
+  "allow-stats-summary",
+  "allow-stats-month",
+  "allow-get-autostart",
+  "allow-set-autostart",
+  "allow-quit-app",
+  "allow-log-js-error",
+  "allow-drag-begin",
+  "allow-drag-end",
+  "allow-morph-begin",
+  "allow-morph-commit",
+]
+
+[[set]]
+identifier = "tray-commands"
+description = "托盘菜单窗口可调用的命令"
+permissions = [
+  "allow-timer-snapshot",
+  "allow-timer-toggle",
+  "allow-timer-reset",
+  "allow-get-autostart",
+  "allow-set-autostart",
+  "allow-focus-main",
+  "allow-tray-menu-hide",
+  "allow-tray-menu-fit",
+  "allow-quit-app",
+]

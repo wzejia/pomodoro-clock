@@ -41,6 +41,8 @@ struct AppState {
     theme: Mutex<Theme>,
     /// 实际注册生效的快捷键字符串（注册失败/关闭时为 None；可能≠配置值——启动降级）
     hotkey_effective: Mutex<Option<String>>,
+    /// 配置写盘串行：从改字段到整份 JSON 落盘持有，避免两次保存交错盖掉对方的字段。
+    persist: Mutex<()>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -55,10 +57,17 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn save_config(state: &AppState) {
+fn write_config(state: &AppState) {
     if let Err(e) = current_appconfig(state).save(&config_path()) {
         eprintln!("[config] 保存失败: {e}");
     }
+}
+
+fn persist<R>(state: &AppState, mutate: impl FnOnce() -> R) -> R {
+    let _guard = state.persist.lock().unwrap();
+    let result = mutate();
+    write_config(state);
+    result
 }
 
 fn emit_snapshot(app: &AppHandle, snap: &TimerSnapshot) {
@@ -90,7 +99,7 @@ fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseComplet
         if let Err(e) = stats.save(&stats_path()) {
             eprintln!("[stats] 保存失败: {e}");
         }
-        save_config(state);
+        persist(state, || {});
     }
     let short_min = (cfg.short_break_ms / 60_000).max(1);
     let long_min = (cfg.long_break_ms / 60_000).max(1);
@@ -180,7 +189,7 @@ fn set_config(
     auto_start_next: bool,
     daily_goal: u32,
 ) -> TimerSnapshot {
-    let snap = {
+    let snap = persist(&state, || {
         let mut t = state.timer.lock().unwrap();
         let mut cfg = *t.config();
         cfg.work_ms = work_min.clamp(1, 120) * 60_000;
@@ -191,8 +200,7 @@ fn set_config(
         cfg.daily_goal = daily_goal.clamp(1, 20);
         t.apply_prefs(cfg);
         t.snapshot()
-    };
-    save_config(&state);
+    });
     emit_snapshot(&app, &snap);
     snap
 }
@@ -205,8 +213,9 @@ fn get_config(state: State<AppState>) -> AppConfig {
 /// 材质切换只动 UI 不动计时：更新内存态并落盘（不触碰 Timer）
 #[tauri::command]
 fn set_material(state: State<AppState>, material: Material) {
-    *state.material.lock().unwrap() = material;
-    save_config(&state);
+    persist(&state, || {
+        *state.material.lock().unwrap() = material;
+    });
 }
 
 /// 三阶段自定义配色（08-16 v16）：同 set_material 模式——只动 UI 不动计时；
@@ -214,8 +223,9 @@ fn set_material(state: State<AppState>, material: Material) {
 #[tauri::command]
 fn set_colors(state: State<AppState>, colors: appconfig::Colors) -> Result<(), String> {
     colors.validate()?;
-    *state.colors.lock().unwrap() = colors;
-    save_config(&state);
+    persist(&state, || {
+        *state.colors.lock().unwrap() = colors;
+    });
     Ok(())
 }
 
@@ -241,8 +251,9 @@ fn current_appconfig(state: &AppState) -> AppConfig {
 
 #[tauri::command]
 fn set_theme(state: State<AppState>, theme: Theme) {
-    *state.theme.lock().unwrap() = theme;
-    save_config(&state);
+    persist(&state, || {
+        *state.theme.lock().unwrap() = theme;
+    });
 }
 
 fn current_hotkey_state(state: &AppState) -> HotkeyState {
@@ -267,6 +278,7 @@ fn set_hotkey(
     if enabled {
         HotkeyConfig::validate(&want)?; // 校验失败：配置不动、旧键不动
     }
+    let _guard = state.persist.lock().unwrap();
     let gs = app.global_shortcut();
     let old = state.hotkey_effective.lock().unwrap().clone();
     if enabled && old.as_deref() == Some(want.as_str()) {
@@ -286,7 +298,7 @@ fn set_hotkey(
         *state.hotkey_effective.lock().unwrap() = None;
     }
     *state.hotkey.lock().unwrap() = HotkeyConfig { enabled, shortcut: want };
-    save_config(&state);
+    write_config(&state);
     Ok(current_hotkey_state(&state))
 }
 
@@ -723,6 +735,7 @@ pub fn run() {
                 colors: Mutex::new(appcfg.colors),
                 theme: Mutex::new(appcfg.theme),
                 hotkey_effective: Mutex::new(None),
+                persist: Mutex::new(()),
             });
 
             // ---------- 托盘自绘菜单窗（v11 弃用原生 muda 菜单）：hidden 启动，右键托盘图标贴图标弹出 ----------
@@ -817,7 +830,19 @@ pub fn run() {
             // ---------- 全局快捷键：读 config.json hotkey 配置；注册失败降级 Ctrl+Alt+O，再失败记日志不崩 ----------
             {
                 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
-                let hk = appcfg.hotkey.clone();
+                let state = app.state::<AppState>();
+                let loaded = state.hotkey.lock().unwrap().clone();
+                let resolved = loaded.clone().resolved_for_startup();
+                if resolved != loaded {
+                    eprintln!(
+                        "[shortcut] 配置快捷键 {} 未通过校验，回退 {}",
+                        loaded.shortcut, resolved.shortcut
+                    );
+                    let _guard = state.persist.lock().unwrap();
+                    *state.hotkey.lock().unwrap() = resolved.clone();
+                    write_config(&state);
+                }
+                let hk = resolved;
                 let mut effective: Option<String> = None;
                 if hk.enabled {
                     match hk.shortcut.parse::<Shortcut>() {
@@ -841,7 +866,6 @@ pub fn run() {
                         Err(e) => eprintln!("[shortcut] 配置快捷键无法解析（{e}），全局快捷键本次不可用"),
                     }
                 }
-                let state = app.state::<AppState>();
                 *state.hotkey_effective.lock().unwrap() = effective;
             }
 

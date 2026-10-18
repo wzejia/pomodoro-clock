@@ -1,4 +1,5 @@
 import { bridge } from "./bridge";
+import { isCardPresented } from "./present";
 import { springValue } from "./spring";
 
 const MINI_W = 220, MINI_H = 76;
@@ -213,8 +214,16 @@ function releasePresented() {
 
 /** 感知时长到了就让设置抽屉出现，弹簧尾巴继续。 */
 export function whenPresented(): Promise<void> {
-  if (expanded && !live && parseFloat(app.style.height || "0") >= PANEL_H - 1) return Promise.resolve();
-  if (live?.expand && (performance.now() - live.t0) / 1000 >= live.duration) return Promise.resolve();
+  const elapsed = live ? (performance.now() - live.t0) / 1000 : 0;
+  if (isCardPresented({
+    expanded,
+    animating: live !== null,
+    height: parseFloat(app.style.height || "0"),
+    panelHeight: PANEL_H,
+    elapsedSec: elapsed,
+    durationSec: live?.duration ?? EXPAND_S,
+    expanding: live?.expand ?? false,
+  })) return Promise.resolve();
   return new Promise((resolve) => { presented = resolve; });
 }
 

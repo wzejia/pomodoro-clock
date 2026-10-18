@@ -78,6 +78,15 @@ impl Default for HotkeyConfig {
 }
 
 impl HotkeyConfig {
+    /// 启动时：未启用则原样保留。启用但无法通过「可解析且含修饰键」校验时，回退默认键。
+    pub fn resolved_for_startup(self) -> Self {
+        if self.enabled && Self::validate(&self.shortcut).is_err() {
+            Self::default()
+        } else {
+            self
+        }
+    }
+
     /// 校验：可解析且至少一个修饰键（纯主键会拦全局输入，拒绝）
     pub fn validate(shortcut: &str) -> Result<(), String> {
         use tauri_plugin_global_shortcut::Shortcut;
@@ -375,6 +384,16 @@ mod tests {
         assert!(loaded.timer.auto_start_next);
         assert_eq!(loaded.hotkey, HotkeyConfig::default());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn startup_hotkey_without_modifier_falls_back_to_default() {
+        let bad = HotkeyConfig { enabled: true, shortcut: "P".into() };
+        assert_eq!(bad.resolved_for_startup(), HotkeyConfig::default());
+        let off = HotkeyConfig { enabled: false, shortcut: "P".into() };
+        assert_eq!(off.clone().resolved_for_startup(), off);
+        let ok = HotkeyConfig { enabled: true, shortcut: "Ctrl+Shift+F5".into() };
+        assert_eq!(ok.clone().resolved_for_startup(), ok);
     }
 
     #[test]
