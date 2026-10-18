@@ -61,8 +61,6 @@
   --text: #f5f5f7;
   --text-secondary: #adaeb2;
   --text-tertiary: #aeaeb2;
-  --break-text: #30d158;
-  --long-text: #64d2ff;
   --on-phase: #1d1d1f;
   --separator: rgba(255, 255, 255, 0.1);
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.5), 0 1px 4px rgba(0, 0, 0, 0.3);
@@ -77,11 +75,14 @@
   --btn-primary-text: #1d1d1f;
 
   --work: #ff453a;
-  --work-text: #ff453a; /* 深底上 fill 红对比已够，文字同 fill */
+  /* 深色液态玻璃顶部有白 sheen，饱和系统红落在上面不到 3:1。文字用更浅的同色相。 */
+  --work-text: #ffa49e;
   --work-soft: rgba(255, 69, 58, 0.18);
   --break: #30d158;
+  --break-text: #3ee56a;
   --break-soft: rgba(48, 209, 88, 0.16);
   --long: #64d2ff;
+  --long-text: #7ad8ff;
   --long-soft: rgba(100, 210, 255, 0.16);
 }
 
@@ -170,12 +171,12 @@ input:focus-visible {
 .pill-phase {
   font-size: 11px;
   font-weight: 600;
-  color: var(--work-text); /* v8③：浅色胶囊红字对比偏弱 → 文字专用深红 */
+  color: var(--text);
   flex-shrink: 0;
   transition: color 0.4s ease;
 }
-.app[data-phase="short_break"] .pill-phase { color: var(--break-text); }
-.app[data-phase="long_break"] .pill-phase { color: var(--long-text); }
+.app[data-phase="short_break"] .pill-phase,
+.app[data-phase="long_break"] .pill-phase { color: var(--text); }
 
 .pill-time {
   flex: 1;
@@ -188,7 +189,7 @@ input:focus-visible {
 }
 
 .app[data-status="paused"] .pill-time,
-.app[data-status="paused"] .panel-time { opacity: 0.45; }
+.app[data-status="paused"] .panel-time { opacity: 0.65; }
 
 /* ---------- v11 胶囊底部 2px 进度条 ----------
    贴底边（bottom:0），左右 26px inset 对齐胶囊底边平段（R38 圆角在底部 2px 处弦宽约 168px），
@@ -298,12 +299,39 @@ input:focus-visible {
   outline: none;
 }
 .focus-label::placeholder { color: var(--text-tertiary); }
-.export-path {
-  margin: 0 14px 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  word-break: break-all;
+.export-row { flex-wrap: wrap; gap: 8px; }
+#btn-export {
+  flex: 0 0 auto;
+  padding: 3px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.18s ease, background-color 0.2s ease;
 }
+#btn-export:hover { filter: brightness(0.94); }
+#btn-export:active { filter: brightness(0.86); }
+[data-theme="dark"] #btn-export:hover { filter: brightness(1.16); }
+[data-theme="dark"] #btn-export:active { filter: brightness(0.84); }
+.export-path {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+[data-theme="dark"] .export-path,
+[data-theme="dark"] .stat-label,
+[data-theme="dark"] .section-caption,
+[data-theme="dark"] .chart-title,
+[data-theme="dark"] .week-day,
+[data-theme="dark"] .focus-label,
+[data-theme="dark"] .pause-note { color: #c7c7cc; }
 .pause-note {
   margin: -4px 0 8px;
   font-size: 13px;
@@ -320,14 +348,14 @@ input:focus-visible {
   font-weight: 600;
   letter-spacing: 0.08em;
   margin-bottom: 6px;
-  color: var(--work-text); /* v8③：同 pill-phase */
+  color: var(--text);
   transition: color 0.4s ease, opacity 0.12s var(--ios-smooth);
 }
 .app.expanded .panel-phase {
   transition: color 0.4s ease, opacity 0.46s var(--ios-smooth) 0.06s;
 }
-.app[data-phase="short_break"] .panel-phase { color: var(--break-text); }
-.app[data-phase="long_break"] .panel-phase { color: var(--long-text); }
+.app[data-phase="short_break"] .panel-phase,
+.app[data-phase="long_break"] .panel-phase { color: var(--text); }
 
 .panel-time {
   font-size: 56px;
@@ -518,13 +546,14 @@ input:focus-visible {
   border-radius: 5px;
   font-family: var(--font);
   font-size: 11px;
-  color: var(--text-secondary);
+  color: #5c5c61;
   cursor: pointer;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
 .seg-opt.active { background: var(--segment-active); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
 [data-theme="dark"] .seg-opt { color: #c7c7cc; }
 [data-theme="dark"] .seg-opt.active {
+  color: var(--text);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
 }
 .month-nav {
@@ -664,7 +693,7 @@ input:focus-visible {
   border-radius: 50%;
   border: none;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text);
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
@@ -710,7 +739,7 @@ input:focus-visible {
   border-radius: 6px;
   font-family: var(--font);
   font-size: 12px;
-  color: var(--text-secondary);
+  color: #5c5c61;
   cursor: pointer;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
@@ -721,7 +750,7 @@ input:focus-visible {
   border-radius: 6px;
   font-family: var(--font);
   font-size: 12px;
-  color: var(--text-secondary);
+  color: #5c5c61;
   cursor: pointer;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
@@ -738,6 +767,7 @@ input:focus-visible {
 /* v8 R32 P3：深色选中 pill 加发丝边线（与轨道明度差追平浅色档存在感） */
 [data-theme="dark"] .theme-opt.active,
 [data-theme="dark"] .material-opt.active {
+  color: var(--text);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35), inset 0 0 0 0.5px rgba(255, 255, 255, 0.16);
 }
 /* v8⑩：外观组两个分段控件等宽（液态玻璃 4 字 vs 浅色 2 字导致的宽度不一致） */
@@ -964,7 +994,8 @@ input:focus-visible {
   left: 8px;
   font-size: 11px;
 }
-.ctx-item:hover { background: var(--accent); color: var(--accent-text); }
+/* 深色 --accent #0a84ff 上的白字只有 3.65:1。悬停用 #0071e3，白字 4.7:1。 */
+.ctx-item:hover { background: #0071e3; color: #fff; }
 
 /* ---------- 设置抽屉（从右滑入覆盖） ---------- */
 .drawer {
@@ -1081,6 +1112,7 @@ input:focus-visible {
 .hotkey-cap.recording { background: var(--accent); color: #fff; }
 .hotkey-cap.error { background: var(--work); color: #fff; }
 .hotkey-cap.off { color: var(--text-tertiary); }
+[data-theme="dark"] .hotkey-cap.off { color: #c7c7cc; }
 .hotkey-off {
   width: 18px;
   height: 18px;
@@ -1179,7 +1211,8 @@ body.mock-preview .app {
 [data-material="liquid_glass"] .theme-switch,
 [data-material="liquid_glass"] .seg-switch,
 [data-material="liquid_glass"] .hotkey-cap,
-[data-material="liquid_glass"] .hotkey-off {
+[data-material="liquid_glass"] .hotkey-off,
+[data-material="liquid_glass"] #btn-export {
   /* R30 P2：白填充（0.42）落在纯白分组卡上不可见 → 改 iOS tertiary 灰填充 */
   background: rgba(120, 120, 128, 0.12);
   box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.05);
@@ -1273,7 +1306,8 @@ body.mock-preview .app {
 [data-theme="dark"][data-material="liquid_glass"] .theme-switch,
 [data-theme="dark"][data-material="liquid_glass"] .seg-switch,
 [data-theme="dark"][data-material="liquid_glass"] .hotkey-cap,
-[data-theme="dark"][data-material="liquid_glass"] .hotkey-off {
+[data-theme="dark"][data-material="liquid_glass"] .hotkey-off,
+[data-theme="dark"][data-material="liquid_glass"] #btn-export {
   background: rgba(118, 118, 124, 0.24);
   box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.08);
 }
@@ -1330,10 +1364,11 @@ body.mock-preview .app {
    基线 .hotkey-cap.recording/.error 平权且定义在后，会盖掉录制蓝/错误红——
    此处后置重申（浅色平权靠顺序）；深色域材质规则权重（0,3,0）更高，需同名权重补刀。
    只改 background/color，不碰几何（v8 立法合规） */
-.hotkey-cap.recording { background: var(--accent); color: #fff; }
-.hotkey-cap.error { background: var(--work); color: #fff; }
-[data-theme="dark"] .hotkey-cap.recording { background: var(--accent); color: #fff; }
-[data-theme="dark"] .hotkey-cap.error { background: var(--work); color: #fff; }
+/* 白字在系统蓝 #0a84ff / 系统红 #ff3b30 上不到 4.5:1，录制和错误改用更深的同色。 */
+.hotkey-cap.recording,
+[data-theme="dark"] .hotkey-cap.recording { background: #0071e3; color: #fff; }
+.hotkey-cap.error,
+[data-theme="dark"] .hotkey-cap.error { background: #d70015; color: #fff; }
 
 /* ---------- 可访问性退化（spec §6，WWDC25-219 转录 18:22 官方语义） ---------- */
 /* Reduced Transparency → “frostier”：霜度拉满近不透明、去 backdrop 依赖 */
@@ -1346,9 +1381,18 @@ body.mock-preview .app {
     -webkit-backdrop-filter: none;
   }
   [data-theme="dark"][data-material="liquid_glass"] .app,
+  [data-theme="dark"][data-material="liquid_glass"] .app.mini,
   [data-theme="dark"][data-material="liquid_glass"] .ctx-menu,
   [data-theme="dark"][data-material="liquid_glass"] .drawer {
     background: rgba(28, 28, 32, 0.97);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  }
+  .ctx-menu {
+    background: var(--bg-solid);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
   [data-material="liquid_glass"] .stat-card,
   [data-material="liquid_glass"] .week-chart,
@@ -1365,15 +1409,17 @@ body.mock-preview .app {
 }
 /* Increased Contrast → 元素近纯黑/白 + 对比描边 */
 @media (prefers-contrast: more) {
-  [data-material="liquid_glass"] .app,
-  [data-material="liquid_glass"] .drawer,
-  [data-material="liquid_glass"] .ctx-menu,
-  [data-material="liquid_glass"] .stat-card,
-  [data-material="liquid_glass"] .group-card {
-    background: var(--bg-solid);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    box-shadow: inset 0 0 0 1px var(--text);
+  .app,
+  .drawer,
+  .ctx-menu,
+  .stat-card,
+  .group-card,
+  .week-chart,
+  .month-chart {
+    background: var(--bg-solid) !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    box-shadow: inset 0 0 0 1px var(--text) !important;
   }
 }
 
