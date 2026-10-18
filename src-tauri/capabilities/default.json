@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "主窗口：计时、设置、统计、拖拽和变形。不含托盘窗口专用命令。",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "core:window:allow-set-size",
-    "notification:default"
+    "notification:default",
+    "main-commands"
   ]
 }

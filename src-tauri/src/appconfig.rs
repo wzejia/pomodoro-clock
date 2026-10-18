@@ -3,7 +3,17 @@
 //! 因此旧版 config.json（无 material 键）加载后 material 取默认 LiquidGlass，
 //! 且 set_config 保存时不会再丢掉材质键（v6.1 之前 TimerConfig::save 直写会丢）。
 
-use crate::timer::TimerConfig;
+use crate::timer::{TimerConfig, TimerSession};
+
+pub const SCHEMA_VERSION: u32 = 1;
+
+fn schema_version() -> u32 {
+    SCHEMA_VERSION
+}
+
+fn sound_on() -> bool {
+    true
+}
 
 /// 界面材质：经典（实心毛玻璃拟态，v6 观感）/ 液态玻璃（iOS 26 拟态，默认）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -48,6 +58,20 @@ impl Colors {
     }
 }
 
+/// 界面主题。旧 config.json 没有该字段时回到浅色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Theme {
+    Light,
+    Dark,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme::Light
+    }
+}
+
 /// 全局快捷键配置：enabled=false 时保留 shortcut 记忆（再开恢复）
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -64,6 +88,15 @@ impl Default for HotkeyConfig {
 }
 
 impl HotkeyConfig {
+    /// 启动时：未启用则原样保留。启用但无法通过「可解析且含修饰键」校验时，回退默认键。
+    pub fn resolved_for_startup(self) -> Self {
+        if self.enabled && Self::validate(&self.shortcut).is_err() {
+            Self::default()
+        } else {
+            self
+        }
+    }
+
     /// 校验：可解析且至少一个修饰键（纯主键会拦全局输入，拒绝）
     pub fn validate(shortcut: &str) -> Result<(), String> {
         use tauri_plugin_global_shortcut::Shortcut;
@@ -78,51 +111,147 @@ impl HotkeyConfig {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    /// 缺省按 v1 读。当前写入也是 1。
+    #[serde(default = "schema_version")]
+    pub version: u32,
     #[serde(flatten)]
     pub timer: TimerConfig,
     pub material: Material,
     pub hotkey: HotkeyConfig,
     /// 三阶段自定义配色（None=默认；serde(default) 保证旧 config.json 升级不炸）
     pub colors: Colors,
+    pub theme: Theme,
+    /// 本组已完成的工作番茄。今日个数在 stats.json，这是圆点和长休间隔的进度。
+    pub completed_work_count: u32,
+    /// 完成提示音。旧文件没有该字段时保持开启。
+    #[serde(default = "sound_on")]
+    pub sound_enabled: bool,
+    /// 进行中的阶段。旧文件没有该字段时为 None，启动不恢复。
+    #[serde(default)]
+    pub session: Option<TimerSession>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            version: SCHEMA_VERSION,
             timer: TimerConfig::default(),
             material: Material::default(),
             hotkey: HotkeyConfig::default(),
             colors: Colors::default(),
+            theme: Theme::default(),
+            completed_work_count: 0,
+            sound_enabled: true,
+            session: None,
         }
     }
 }
 
+fn clamp_minutes_ms(ms: u64, min_minutes: u64, max_minutes: u64) -> u64 {
+    ms.clamp(min_minutes * 60_000, max_minutes * 60_000)
+}
+
 impl AppConfig {
-    /// 与 TimerConfig::load 同策略：文件缺失/损坏回默认（不崩），缺字段补默认
+    fn normalize(&mut self) {
+        self.timer.work_ms = clamp_minutes_ms(self.timer.work_ms, 1, 120);
+        self.timer.short_break_ms = clamp_minutes_ms(self.timer.short_break_ms, 1, 60);
+        self.timer.long_break_ms = clamp_minutes_ms(self.timer.long_break_ms, 1, 60);
+        self.timer.long_break_every = self.timer.long_break_every.clamp(1, 10);
+        self.timer.daily_goal = self.timer.daily_goal.clamp(1, 20);
+    }
+}
+
+fn scrub_bad_field<T: serde::de::DeserializeOwned>(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) {
+    let Some(value) = obj.get(key) else { return };
+    if serde_json::from_value::<T>(value.clone()).is_err() {
+        eprintln!("[config] 字段 {key} 无法解析，该字段回默认，其余保留");
+        obj.remove(key);
+    }
+}
+
+pub struct ConfigLoad {
+    pub config: AppConfig,
+    /// 原文件还在，且没能备份。调用方不得 save。
+    pub save_blocked: bool,
+}
+
+impl AppConfig {
+    /// 文件缺失或整份不是 JSON 时回默认。单个字段类型不对时丢掉该字段，其余保留。
     pub fn load(path: &std::path::Path) -> Self {
-        match std::fs::read_to_string(path) {
-            // 08-18 P2-2：单字段类型错会整份回默认——至少留日志，用户配置"消失"可追溯
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-                eprintln!("[config] 应用配置解析失败，回默认（{e}）");
-                Self::default()
-            }),
-            Err(_) => Self::default(),
+        Self::load_reported(path).config
+    }
+
+    /// `save_blocked` 为真时，调用方不得把内存里的默认配置写回原路径。
+    pub fn load_reported(path: &std::path::Path) -> ConfigLoad {
+        let text = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return ConfigLoad { config: Self::default(), save_blocked: false };
+            }
+            Err(e) => {
+                eprintln!("[config] 读取失败（{e}）");
+                return Self::quarantine_whole(path);
+            }
+        };
+        if let Ok(mut cfg) = serde_json::from_str::<Self>(&text) {
+            cfg.normalize();
+            return ConfigLoad { config: cfg, save_blocked: false };
+        }
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            eprintln!("[config] 应用配置不是 JSON");
+            return Self::quarantine_whole(path);
+        };
+        let Some(obj) = value.as_object_mut() else {
+            eprintln!("[config] 应用配置不是对象");
+            return Self::quarantine_whole(path);
+        };
+        scrub_bad_field::<u64>(obj, "work_ms");
+        scrub_bad_field::<u64>(obj, "short_break_ms");
+        scrub_bad_field::<u64>(obj, "long_break_ms");
+        scrub_bad_field::<u32>(obj, "long_break_every");
+        scrub_bad_field::<bool>(obj, "auto_start_next");
+        scrub_bad_field::<u32>(obj, "daily_goal");
+        scrub_bad_field::<Material>(obj, "material");
+        scrub_bad_field::<HotkeyConfig>(obj, "hotkey");
+        scrub_bad_field::<Colors>(obj, "colors");
+        scrub_bad_field::<Theme>(obj, "theme");
+        scrub_bad_field::<u32>(obj, "completed_work_count");
+        scrub_bad_field::<bool>(obj, "sound_enabled");
+        scrub_bad_field::<u32>(obj, "version");
+        scrub_bad_field::<TimerSession>(obj, "session");
+        match serde_json::from_value::<Self>(value) {
+            Ok(mut cfg) => {
+                cfg.normalize();
+                ConfigLoad { config: cfg, save_blocked: false }
+            }
+            Err(e) => {
+                eprintln!("[config] 应用配置解析失败（{e}）");
+                Self::quarantine_whole(path)
+            }
+        }
+    }
+
+    fn quarantine_whole(path: &std::path::Path) -> ConfigLoad {
+        match crate::atomic_file::quarantine_corrupt(path) {
+            Ok(dest) => {
+                eprintln!("[config] 已备份到 {}，不会用默认配置覆盖原文件", dest.display());
+                ConfigLoad { config: Self::default(), save_blocked: false }
+            }
+            Err(e) => {
+                eprintln!("[config] 备份失败（{e}）。拒绝用默认配置覆盖原文件");
+                ConfigLoad { config: Self::default(), save_blocked: true }
+            }
         }
     }
 
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        let tmp = path.with_extension("json.tmp");
         // 08-18 P2：序列化失败转 io::Error 走 ?，不在 save 路径 panic
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        crate::atomic_file::write_atomic(path, json.as_bytes())
     }
 }
 
@@ -143,6 +272,7 @@ mod tests {
         let dir = tmpdir("roundtrip");
         let path = dir.join("config.json");
         let cfg = AppConfig {
+            version: SCHEMA_VERSION,
             timer: TimerConfig {
                 work_ms: 30 * MIN,
                 short_break_ms: 10 * MIN,
@@ -158,6 +288,17 @@ mod tests {
                 short_break: Some("#30d158".to_string()),
                 long_break: Some("#64d2ff".to_string()),
             },
+            theme: Theme::Dark,
+            completed_work_count: 2,
+            sound_enabled: true,
+            session: Some(TimerSession {
+                phase: crate::timer::Phase::Work,
+                status: crate::timer::Status::Paused,
+                phase_total_ms: 30 * MIN,
+                remaining_ms: 12 * MIN,
+                pause_reason: None,
+                focus_label: String::new(),
+            }),
         };
         cfg.save(&path).unwrap();
         let loaded = AppConfig::load(&path);
@@ -285,9 +426,9 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// hotkey 字段类型错误（如 "hotkey": 123）→ 与整文件损坏同策略：整体回默认不崩
+    /// hotkey 字段类型错误时只丢掉热键，时长和自动开始仍保留
     #[test]
-    fn corrupt_hotkey_field_falls_back_to_default() {
+    fn corrupt_hotkey_field_keeps_timer() {
         let dir = tmpdir("hotkey-corrupt");
         let path = dir.join("config.json");
         std::fs::write(
@@ -297,8 +438,20 @@ mod tests {
         )
         .unwrap();
         let loaded = AppConfig::load(&path);
-        assert_eq!(loaded, AppConfig::default());
+        assert_eq!(loaded.timer.work_ms, 30 * MIN);
+        assert!(loaded.timer.auto_start_next);
+        assert_eq!(loaded.hotkey, HotkeyConfig::default());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn startup_hotkey_without_modifier_falls_back_to_default() {
+        let bad = HotkeyConfig { enabled: true, shortcut: "P".into() };
+        assert_eq!(bad.resolved_for_startup(), HotkeyConfig::default());
+        let off = HotkeyConfig { enabled: false, shortcut: "P".into() };
+        assert_eq!(off.clone().resolved_for_startup(), off);
+        let ok = HotkeyConfig { enabled: true, shortcut: "Ctrl+Shift+F5".into() };
+        assert_eq!(ok.clone().resolved_for_startup(), ok);
     }
 
     #[test]
@@ -309,5 +462,95 @@ mod tests {
         assert!(HotkeyConfig::validate("Ctrl+Alt").is_err()); // 无主键
         assert!(HotkeyConfig::validate("").is_err());
         assert!(HotkeyConfig::validate("Ctrl+Alt+P+X").is_err()); // 双主键
+    }
+
+    #[test]
+    fn load_clamps_every_goal_and_fills_theme() {
+        let dir = tmpdir("clamp");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"work_ms":0,"short_break_ms":300000,"long_break_ms":900000,"long_break_every":0,"auto_start_next":false,"daily_goal":40}"#,
+        )
+        .unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.timer.work_ms, 60_000);
+        assert_eq!(loaded.timer.long_break_every, 1);
+        assert_eq!(loaded.timer.daily_goal, 20);
+        assert_eq!(loaded.theme, Theme::Light);
+        assert_eq!(loaded.completed_work_count, 0);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(loaded.session, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn legacy_config_without_version_reads_as_v1() {
+        let dir = tmpdir("legacy-version");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"work_ms": 1800000, "short_break_ms": 300000, "long_break_ms": 900000,
+                "long_break_every": 4, "auto_start_next": false}"#,
+        )
+        .unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(loaded.session, None);
+        assert_eq!(loaded.timer.work_ms, 30 * MIN);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn corrupt_session_field_keeps_the_rest() {
+        let dir = tmpdir("bad-session");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"work_ms":1800000,"short_break_ms":300000,"long_break_ms":900000,"long_break_every":4,"auto_start_next":true,"session":"nope"}"#,
+        )
+        .unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.timer.work_ms, 30 * MIN);
+        assert!(loaded.timer.auto_start_next);
+        assert_eq!(loaded.session, None);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn whole_config_corrupt_is_backed_up_not_overwritten() {
+        let dir = tmpdir("whole-corrupt");
+        let path = dir.join("config.json");
+        let original = "{ not valid json !!!";
+        std::fs::write(&path, original).unwrap();
+        let loaded = AppConfig::load_reported(&path);
+        assert_eq!(loaded.config.material, Material::LiquidGlass);
+        assert!(!loaded.save_blocked);
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), original);
+        loaded.config.save(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), original);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn config_save_blocks_when_backup_fails() {
+        let dir = tmpdir("cfg-nobackup");
+        let path = dir.join("config.json");
+        let original = b"{ not valid json !!!";
+        std::fs::write(&path, original).unwrap();
+        let loaded = {
+            let _guard = crate::atomic_file::block_quarantine(&path);
+            AppConfig::load_reported(&path)
+        };
+        assert!(loaded.save_blocked, "备份失败时必须禁止覆盖");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

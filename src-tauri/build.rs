@@ -1,3 +1,39 @@
 fn main() {
-    tauri_build::build()
+    tauri_build::try_build(
+        tauri_build::Attributes::new().app_manifest(
+            tauri_build::AppManifest::new().commands(&[
+                "timer_start",
+                "timer_pause",
+                "timer_resume",
+                "timer_reset",
+                "timer_skip",
+                "timer_snapshot",
+                "set_config",
+                "get_config",
+                "set_material",
+                "set_colors",
+                "set_theme",
+                "set_sound",
+                "set_focus_label",
+                "export_stats",
+                "get_hotkey",
+                "set_hotkey",
+                "stats_summary",
+                "stats_month",
+                "get_autostart",
+                "set_autostart",
+                "quit_app",
+                "log_js_error",
+                "timer_toggle",
+                "tray_menu_hide",
+                "focus_main",
+                "tray_menu_fit",
+                "drag_begin",
+                "drag_end",
+                "morph_begin",
+                "morph_commit",
+            ]),
+        ),
+    )
+    .expect("failed to run tauri-build");
 }

@@ -1,6 +1,7 @@
 //! 番茄钟计时状态机 —— 唯一计时真相来源。
-//! 所有时间均为毫秒；tick(now_ms) 由调用方（Tauri 端定时器）驱动，
-//! 测试时可直接注入虚拟时间，保证暂停/继续零失真。
+//! 所有时间均为毫秒。`tick(now_ms)` 按调用方给的逻辑时间扣减，测试可一次跳过整段番茄。
+//! 生产环境走 `sample(mono_ms, wall_ms)`：单调时钟扣减，墙钟只用来识别睡眠和校时。
+//! 两次采样间隔超过 [`MAX_SAMPLE_GAP_MS`] 时自动暂停，这段不计入专注。
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +27,44 @@ pub enum Status {
     Idle,
     Running,
     Paused,
+}
+
+/// 生产采样允许的最大间隔。tick 线程 250ms 一拍，超过几秒就是睡眠、挂起或校时，不是专注。
+pub const MAX_SAMPLE_GAP_MS: u64 = 3_000;
+
+/// `sample` 的结果。`tick` 仍按逻辑时间前进，不在这里拦截测试里的整段跳时。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sample {
+    /// 不在运行，什么都没改。
+    Idle,
+    /// 已按单调时钟扣减。内层 Some 表示阶段刚完成。
+    Ticked(Option<PhaseCompleted>),
+    /// 间隔异常，已暂停，剩余时间原样保留。
+    AutoPaused,
+}
+
+/// 为什么停在暂停。手暂停、睡眠或校时、进程恢复，界面要用不同的一句话。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PauseReason {
+    User,
+    Gap,
+    Restored,
+}
+
+/// 落盘的进行中阶段。重启时 Running 会改成 Paused，避免把关机时间算进番茄。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TimerSession {
+    pub phase: Phase,
+    pub status: Status,
+    pub phase_total_ms: u64,
+    pub remaining_ms: u64,
+    /// 旧文件没有该字段时，暂停按手暂停理解。
+    #[serde(default)]
+    pub pause_reason: Option<PauseReason>,
+    /// 这一轮正在做的事。旧会话没有该字段。
+    #[serde(default)]
+    pub focus_label: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -74,18 +113,10 @@ impl TimerConfig {
     }
 
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        let tmp = path.with_extension("json.tmp");
         // 08-18 P2：序列化失败转 io::Error 走 ?，不在 save 路径 panic
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        crate::atomic_file::write_atomic(path, json.as_bytes())
     }
 }
 
@@ -96,6 +127,19 @@ pub struct PhaseCompleted {
     pub to: Phase,
     /// 若 from == Work，这是本轮完成的工作番茄序号（1 起）
     pub completed_work_count: u32,
+    /// `from` 这一阶段锁定的满时长。统计必须用它，不能用之后可能已改过的配置。
+    pub phase_total_ms: u64,
+}
+
+impl PhaseCompleted {
+    /// 工作阶段完成时写入统计的秒数。休息阶段不记。
+    pub fn stats_duration_secs(self) -> Option<u64> {
+        if self.from == Phase::Work {
+            Some(self.phase_total_ms / 1000)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -111,6 +155,9 @@ pub struct TimerSnapshot {
     pub daily_goal: u32,
     /// 当前工作阶段时长（分钟口径目标线换算用；阶段字段而非剩余值，break 阶段下也取 work）
     pub work_ms: u64,
+    /// 仅暂停时有值。
+    pub pause_reason: Option<PauseReason>,
+    pub focus_label: String,
 }
 
 pub struct Timer {
@@ -118,9 +165,15 @@ pub struct Timer {
     phase: Phase,
     status: Status,
     remaining_ms: u64,
-    /// Running 时最后一次 tick 的时间戳
+    /// 本阶段锁定的满时长。运行或暂停中改配置不改它，下一阶段才读新时长。
+    phase_total_ms: u64,
+    /// Running 时最后一次采样的单调时间戳
     last_tick_ms: u64,
+    /// Running 时最后一次采样的墙钟。0 表示还没锚定，只按单调间隔判断。
+    last_wall_ms: u64,
     completed_work_count: u32,
+    pause_reason: Option<PauseReason>,
+    focus_label: String,
 }
 
 impl Timer {
@@ -129,9 +182,85 @@ impl Timer {
             phase: Phase::Work,
             status: Status::Idle,
             remaining_ms: config.work_ms,
+            phase_total_ms: config.work_ms,
             last_tick_ms: 0,
+            last_wall_ms: 0,
             completed_work_count: 0,
+            pause_reason: None,
+            focus_label: String::new(),
             config,
+        }
+    }
+
+    pub fn session(&self) -> TimerSession {
+        TimerSession {
+            phase: self.phase,
+            status: self.status,
+            phase_total_ms: self.phase_total_ms,
+            remaining_ms: self.remaining_ms,
+            pause_reason: self.pause_reason,
+            focus_label: self.focus_label.clone(),
+        }
+    }
+
+    pub fn set_focus_label(&mut self, label: String) {
+        self.focus_label = label.trim().chars().take(40).collect();
+    }
+
+    /// 从磁盘恢复。Running 一律改成 Paused：退出到再次启动之间没有人在专注。
+    pub fn restore_session(&mut self, session: TimerSession) {
+        self.phase = session.phase;
+        let fallback = self.phase_duration(session.phase).max(1);
+        let total = if session.phase_total_ms == 0 {
+            fallback
+        } else {
+            session.phase_total_ms
+        };
+        self.phase_total_ms = total;
+        self.remaining_ms = session.remaining_ms.min(total);
+        self.status = match session.status {
+            Status::Running | Status::Paused => Status::Paused,
+            Status::Idle => Status::Idle,
+        };
+        self.pause_reason = match session.status {
+            Status::Running => Some(PauseReason::Restored),
+            Status::Paused => session.pause_reason.or(Some(PauseReason::User)),
+            Status::Idle => None,
+        };
+        self.last_tick_ms = 0;
+        self.last_wall_ms = 0;
+        self.focus_label = session.focus_label;
+    }
+
+    /// 刷盘窗口结束。墙钟跳变超过阈值就暂停且不扣时；否则把锚点拨到现在，磁盘等待不算专注。
+    pub fn finish_io(&mut self, wall_before: u64, mono_after: u64, wall_after: u64) {
+        if self.status != Status::Running {
+            return;
+        }
+        let forward = wall_after.saturating_sub(wall_before);
+        let back = wall_before.saturating_sub(wall_after);
+        if forward > MAX_SAMPLE_GAP_MS || back > MAX_SAMPLE_GAP_MS {
+            eprintln!(
+                "[timer] 刷盘期间墙钟异常（前跳 {forward} ms，回拨 {back} ms），不计入专注，已暂停"
+            );
+            self.status = Status::Paused;
+            self.pause_reason = Some(PauseReason::Gap);
+            self.last_tick_ms = mono_after;
+            self.last_wall_ms = wall_after;
+            return;
+        }
+        self.reanchor(mono_after, wall_after);
+    }
+
+    pub fn mark_wall(&mut self, wall_ms: u64) {
+        self.last_wall_ms = wall_ms;
+    }
+
+    /// 把采样锚点拨到现在，不扣剩余时间。刷盘之后调用，避免磁盘等待被当成专注或睡眠。
+    pub fn reanchor(&mut self, mono_ms: u64, wall_ms: u64) {
+        if self.status == Status::Running {
+            self.last_tick_ms = mono_ms;
+            self.last_wall_ms = wall_ms;
         }
     }
 
@@ -141,6 +270,14 @@ impl Timer {
 
     pub fn work_duration_secs(&self) -> u64 {
         self.config.work_ms / 1000
+    }
+
+    pub fn completed_count(&self) -> u32 {
+        self.completed_work_count
+    }
+
+    pub fn restore_completed(&mut self, n: u32) {
+        self.completed_work_count = n;
     }
 
     fn phase_duration(&self, phase: Phase) -> u64 {
@@ -156,19 +293,24 @@ impl Timer {
             phase: self.phase,
             status: self.status,
             remaining_ms: self.remaining_ms,
-            total_ms: self.phase_duration(self.phase),
+            total_ms: self.phase_total_ms,
             completed_work_count: self.completed_work_count,
             long_break_every: self.config.long_break_every,
             daily_goal: self.config.daily_goal,
             work_ms: self.config.work_ms,
+            pause_reason: self.pause_reason,
+            focus_label: self.focus_label.clone(),
         }
     }
 
     /// 开始（Idle → Running）；运行中调用等价于重置后重新开始
     pub fn start(&mut self, now_ms: u64) {
-        self.remaining_ms = self.phase_duration(self.phase);
+        self.enter_phase(self.phase);
         self.status = Status::Running;
+        self.pause_reason = None;
         self.last_tick_ms = now_ms;
+        // 墙钟由调用方 mark_wall 重新锚定。留 0 则暂停期间的墙钟差不会在下一次采样里被当成睡眠。
+        self.last_wall_ms = 0;
     }
 
     pub fn pause(&mut self, now_ms: u64) {
@@ -177,6 +319,7 @@ impl Timer {
         }
         self.accumulate(now_ms);
         self.status = Status::Paused;
+        self.pause_reason = Some(PauseReason::User);
     }
 
     pub fn resume(&mut self, now_ms: u64) {
@@ -184,34 +327,104 @@ impl Timer {
             return;
         }
         self.status = Status::Running;
+        self.pause_reason = None;
         self.last_tick_ms = now_ms;
+        self.last_wall_ms = 0;
     }
 
-    /// 重置：回到当前阶段初始、Idle
+    /// 用户暂停。间隔异常时不扣这段时间，直接暂停。
+    pub fn pause_at(&mut self, mono_ms: u64, wall_ms: u64) {
+        if self.status != Status::Running {
+            return;
+        }
+        if self.disarm_if_gap(mono_ms, wall_ms) {
+            return;
+        }
+        self.pause(mono_ms);
+        self.last_wall_ms = wall_ms;
+    }
+
+    /// 生产环境的一次采样。正常间隔等价于 `tick(mono_ms)`；异常间隔自动暂停且不扣时。
+    pub fn sample(&mut self, mono_ms: u64, wall_ms: u64) -> Sample {
+        if self.status != Status::Running {
+            return Sample::Idle;
+        }
+        if self.disarm_if_gap(mono_ms, wall_ms) {
+            return Sample::AutoPaused;
+        }
+        self.last_wall_ms = wall_ms;
+        Sample::Ticked(self.tick(mono_ms))
+    }
+
+    /// 间隔异常则暂停并返回 true。剩余时间不动。
+    fn disarm_if_gap(&mut self, mono_ms: u64, wall_ms: u64) -> bool {
+        let mono_gap = mono_ms.saturating_sub(self.last_tick_ms);
+        let (forward, back) = if self.last_wall_ms == 0 {
+            (0, 0)
+        } else {
+            (
+                wall_ms.saturating_sub(self.last_wall_ms),
+                self.last_wall_ms.saturating_sub(wall_ms),
+            )
+        };
+        if mono_gap <= MAX_SAMPLE_GAP_MS
+            && forward <= MAX_SAMPLE_GAP_MS
+            && back <= MAX_SAMPLE_GAP_MS
+        {
+            return false;
+        }
+        eprintln!(
+            "[timer] 采样间隔异常（单调 {mono_gap} ms，墙钟前跳 {forward} ms，回拨 {back} ms），本段不计入专注，已自动暂停"
+        );
+        self.status = Status::Paused;
+        self.pause_reason = Some(PauseReason::Gap);
+        self.last_tick_ms = mono_ms;
+        self.last_wall_ms = wall_ms;
+        true
+    }
+
+    /// 重置：回到当前阶段初始、Idle。本组完成数保留。
     pub fn reset(&mut self) {
-        self.remaining_ms = self.phase_duration(self.phase);
+        self.enter_phase(self.phase);
         self.status = Status::Idle;
+        self.pause_reason = None;
     }
 
     /// 跳过当前阶段（不计入完成数），进入下一阶段并停表
     pub fn skip(&mut self) -> PhaseCompleted {
         let from = self.phase;
+        let phase_total_ms = self.phase_total_ms;
         let to = self.next_phase_after(from, false);
-        self.phase = to;
-        self.remaining_ms = self.phase_duration(to);
+        self.enter_phase(to);
         self.status = Status::Idle;
+        self.pause_reason = None;
         PhaseCompleted {
             from,
             to,
             completed_work_count: self.completed_work_count,
+            phase_total_ms,
+        }
+    }
+
+    /// 写入偏好。空闲时当前阶段的满时长跟着变；运行或暂停中剩余时间和本阶段满时长保持，下一阶段才用新时长。
+    pub fn apply_prefs(&mut self, mut config: TimerConfig) {
+        config.long_break_every = config.long_break_every.max(1);
+        config.daily_goal = config.daily_goal.clamp(1, 20);
+        self.config = config;
+        if self.status == Status::Idle {
+            self.enter_phase(self.phase);
+            self.status = Status::Idle;
         }
     }
 
     pub fn set_config(&mut self, config: TimerConfig) {
-        self.config = config;
-        // 配置变更后当前阶段剩余时间按新时长重置（停表）
-        self.remaining_ms = self.phase_duration(self.phase);
-        self.status = Status::Idle;
+        self.apply_prefs(config);
+    }
+
+    fn enter_phase(&mut self, phase: Phase) {
+        self.phase = phase;
+        self.phase_total_ms = self.phase_duration(phase);
+        self.remaining_ms = self.phase_total_ms;
     }
 
     /// 驱动时间前进。返回 Some 表示阶段完成并已自动切换（新阶段自动开跑）。
@@ -224,13 +437,14 @@ impl Timer {
             return None;
         }
         let from = self.phase;
+        let phase_total_ms = self.phase_total_ms;
         if from == Phase::Work {
             self.completed_work_count += 1;
         }
         let to = self.next_phase_after(from, true);
-        self.phase = to;
-        self.remaining_ms = self.phase_duration(to);
+        self.enter_phase(to);
         // auto_start_next=true 时自动开跑下一阶段；否则停表等手动开始
+        self.pause_reason = None;
         if self.config.auto_start_next {
             self.status = Status::Running;
             self.last_tick_ms = now_ms;
@@ -241,6 +455,7 @@ impl Timer {
             from,
             to,
             completed_work_count: self.completed_work_count,
+            phase_total_ms,
         })
     }
 
@@ -429,16 +644,75 @@ mod tests {
     }
 
     #[test]
-    fn set_config_resets_current_phase() {
+    fn apply_prefs_keeps_running_phase() {
         let mut t = default_timer();
         t.start(0);
         t.tick(5_000);
+        let remain = t.snapshot().remaining_ms;
+        let mut cfg = *t.config();
+        cfg.daily_goal = 3;
+        cfg.auto_start_next = true;
+        cfg.work_ms = 50 * MIN;
+        t.apply_prefs(cfg);
+        let s = t.snapshot();
+        assert_eq!(s.status, Status::Running);
+        assert_eq!(s.remaining_ms, remain);
+        assert_eq!(s.total_ms, 25 * MIN);
+        assert_eq!(s.daily_goal, 3);
+        assert_eq!(s.work_ms, 50 * MIN);
+    }
+
+    #[test]
+    fn apply_prefs_paused_keeps_status() {
+        let mut t = default_timer();
+        t.start(0);
+        t.tick(5_000);
+        t.pause(5_000);
+        let remain = t.snapshot().remaining_ms;
+        let mut cfg = *t.config();
+        cfg.short_break_ms = 8 * MIN;
+        t.apply_prefs(cfg);
+        let s = t.snapshot();
+        assert_eq!(s.status, Status::Paused);
+        assert_eq!(s.remaining_ms, remain);
+        assert_eq!(s.phase, Phase::Work);
+    }
+
+    #[test]
+    fn apply_prefs_idle_refreshes_full_duration() {
+        let mut t = default_timer();
         let mut cfg = TimerConfig::default();
         cfg.work_ms = 50 * MIN;
-        t.set_config(cfg);
+        t.apply_prefs(cfg);
         let s = t.snapshot();
         assert_eq!(s.status, Status::Idle);
         assert_eq!(s.remaining_ms, 50 * MIN);
+        assert_eq!(s.total_ms, 50 * MIN);
+    }
+
+    #[test]
+    fn restore_completed_survives_reset() {
+        let mut t = default_timer();
+        t.restore_completed(3);
+        assert_eq!(t.snapshot().completed_work_count, 3);
+        t.reset();
+        assert_eq!(t.snapshot().status, Status::Idle);
+        assert_eq!(t.snapshot().completed_work_count, 3);
+        assert_eq!(t.snapshot().remaining_ms, 25 * MIN);
+    }
+
+    #[test]
+    fn next_phase_uses_duration_changed_while_running() {
+        let mut t = default_timer();
+        t.start(0);
+        let mut cfg = *t.config();
+        cfg.short_break_ms = 8 * MIN;
+        t.apply_prefs(cfg);
+        let ev = t.tick(25 * MIN).unwrap();
+        assert_eq!(ev.to, Phase::ShortBreak);
+        assert_eq!(t.snapshot().remaining_ms, 8 * MIN);
+        assert_eq!(t.snapshot().total_ms, 8 * MIN);
+        assert_eq!(t.snapshot().status, Status::Idle);
     }
 
     /// 间隔可调：set_config 把 long_break_every 改成 2 后，第 2 个工作番茄即触发长休
@@ -559,5 +833,192 @@ mod tests {
         // 跑完一个工作阶段触发 next_phase_after（0 % max(1,0) 而非除零）
         t.start(0);
         let _ = t.tick(cfg.work_ms);
+    }
+
+    #[test]
+    fn sample_suspend_gap_pauses_without_completing() {
+        let mut t = default_timer();
+        t.start(0);
+        t.mark_wall(5_000_000);
+        // 旧实现按墙钟差扣时，这一跳会直接完成番茄并记入统计。
+        let s = t.sample(25 * MIN, 5_000_000 + 25 * MIN);
+        assert_eq!(s, Sample::AutoPaused);
+        let snap = t.snapshot();
+        assert_eq!(snap.phase, Phase::Work);
+        assert_eq!(snap.status, Status::Paused);
+        assert_eq!(snap.remaining_ms, 25 * MIN);
+        assert_eq!(snap.completed_work_count, 0);
+    }
+
+    #[test]
+    fn sample_wall_jump_forward_pauses_without_deducting() {
+        let mut t = default_timer();
+        t.start(10_000);
+        t.mark_wall(1_000_000);
+        let before = t.snapshot().remaining_ms;
+        let s = t.sample(10_250, 1_000_000 + 60_000);
+        assert_eq!(s, Sample::AutoPaused);
+        assert_eq!(t.snapshot().status, Status::Paused);
+        assert_eq!(t.snapshot().remaining_ms, before);
+    }
+
+    #[test]
+    fn sample_wall_rollback_does_not_complete_on_the_next_tick() {
+        let mut t = default_timer();
+        t.start(1_000);
+        t.mark_wall(10_000_000);
+        t.sample(1_200, 10_000_200);
+        let remain = t.snapshot().remaining_ms;
+        let rolled = t.sample(1_400, 10_000_200 - 3_600_000);
+        assert_eq!(rolled, Sample::AutoPaused);
+        assert_eq!(t.snapshot().phase, Phase::Work);
+        assert_eq!(t.snapshot().remaining_ms, remain);
+        t.resume(50_000);
+        t.mark_wall(20_000_000);
+        let next = t.sample(50_400, 20_000_400);
+        assert_eq!(next, Sample::Ticked(None));
+        assert_eq!(t.snapshot().status, Status::Running);
+        assert_eq!(t.snapshot().remaining_ms, remain - 400);
+    }
+
+    #[test]
+    fn sample_mono_rollback_does_not_deduct_or_complete() {
+        let mut t = default_timer();
+        t.start(10_000);
+        t.mark_wall(5_000_000);
+        t.sample(10_200, 5_000_200);
+        let remain = t.snapshot().remaining_ms;
+        let s = t.sample(9_000, 5_000_400);
+        assert_eq!(s, Sample::Ticked(None));
+        assert_eq!(t.snapshot().status, Status::Running);
+        assert_eq!(t.snapshot().phase, Phase::Work);
+        assert_eq!(t.snapshot().remaining_ms, remain);
+    }
+
+    #[test]
+    fn sample_small_wall_step_keeps_running_on_mono() {
+        let mut t = default_timer();
+        t.start(1_000);
+        t.mark_wall(10_000_000);
+        let s = t.sample(1_250, 10_000_000 - 20);
+        assert_eq!(s, Sample::Ticked(None));
+        assert_eq!(t.snapshot().status, Status::Running);
+        assert_eq!(t.snapshot().remaining_ms, 25 * MIN - 250);
+    }
+
+    #[test]
+    fn pause_at_suspend_does_not_deduct() {
+        let mut t = default_timer();
+        t.start(0);
+        t.mark_wall(1_000);
+        t.pause_at(30_000, 31_000);
+        assert_eq!(t.snapshot().status, Status::Paused);
+        assert_eq!(t.snapshot().remaining_ms, 25 * MIN);
+    }
+
+    #[test]
+    fn restore_running_session_comes_back_paused() {
+        let mut t = default_timer();
+        t.restore_completed(2);
+        t.restore_session(TimerSession {
+            phase: Phase::Work,
+            status: Status::Running,
+            phase_total_ms: 25 * MIN,
+            remaining_ms: 10 * MIN,
+            pause_reason: None,
+            focus_label: String::new(),
+        });
+        assert_eq!(t.snapshot().pause_reason, Some(PauseReason::Restored));
+        let s = t.snapshot();
+        assert_eq!(s.status, Status::Paused);
+        assert_eq!(s.phase, Phase::Work);
+        assert_eq!(s.remaining_ms, 10 * MIN);
+        assert_eq!(s.total_ms, 25 * MIN);
+        assert_eq!(s.completed_work_count, 2);
+        assert!(t.tick(60_000).is_none());
+        assert_eq!(t.snapshot().remaining_ms, 10 * MIN);
+        t.resume(60_000);
+        t.tick(65_000);
+        assert_eq!(t.snapshot().remaining_ms, 10 * MIN - 5_000);
+    }
+
+    #[test]
+    fn restore_paused_and_idle_keep_their_status() {
+        let mut paused = default_timer();
+        paused.restore_session(TimerSession {
+            phase: Phase::ShortBreak,
+            status: Status::Paused,
+            phase_total_ms: 5 * MIN,
+            remaining_ms: 90_000,
+            pause_reason: Some(PauseReason::Gap),
+            focus_label: String::new(),
+        });
+        assert_eq!(paused.snapshot().pause_reason, Some(PauseReason::Gap));
+        assert_eq!(paused.snapshot().status, Status::Paused);
+        assert_eq!(paused.snapshot().phase, Phase::ShortBreak);
+        assert_eq!(paused.snapshot().remaining_ms, 90_000);
+
+        let mut idle = default_timer();
+        idle.restore_session(TimerSession {
+            phase: Phase::LongBreak,
+            status: Status::Idle,
+            phase_total_ms: 15 * MIN,
+            remaining_ms: 15 * MIN,
+            pause_reason: None,
+            focus_label: String::new(),
+        });
+        assert_eq!(idle.snapshot().status, Status::Idle);
+        assert_eq!(idle.snapshot().remaining_ms, 15 * MIN);
+    }
+
+    #[test]
+    fn phase_completed_reports_locked_total_not_live_config() {
+        let mut t = default_timer();
+        t.start(0);
+        let mut cfg = *t.config();
+        cfg.work_ms = 50 * MIN;
+        t.apply_prefs(cfg);
+        let ev = t.tick(25 * MIN).unwrap();
+        assert_eq!(ev.from, Phase::Work);
+        assert_eq!(ev.phase_total_ms, 25 * MIN);
+        assert_eq!(t.work_duration_secs(), 50 * 60);
+        assert_eq!(ev.stats_duration_secs(), Some(25 * 60));
+        assert_eq!(t.snapshot().remaining_ms, 5 * MIN);
+    }
+
+    #[test]
+    fn flush_wall_jump_pauses_without_deducting() {
+        let mut t = default_timer();
+        t.start(1_000);
+        t.mark_wall(5_000_000);
+        t.sample(1_200, 5_000_200);
+        let remain = t.snapshot().remaining_ms;
+        t.finish_io(5_000_200, 1_400, 5_000_200 + 60_000);
+        assert_eq!(t.snapshot().status, Status::Paused);
+        assert_eq!(t.snapshot().pause_reason, Some(PauseReason::Gap));
+        assert_eq!(t.snapshot().remaining_ms, remain);
+    }
+
+    #[test]
+    fn flush_disk_wait_is_not_counted_as_focus() {
+        let mut t = default_timer();
+        t.start(1_000);
+        t.mark_wall(5_000_000);
+        let remain = t.snapshot().remaining_ms;
+        t.finish_io(5_000_000, 3_000, 5_002_000);
+        assert_eq!(t.snapshot().status, Status::Running);
+        assert_eq!(t.snapshot().remaining_ms, remain);
+        let next = t.sample(3_250, 5_002_250);
+        assert_eq!(next, Sample::Ticked(None));
+        assert_eq!(t.snapshot().remaining_ms, remain - 250);
+    }
+
+    #[test]
+    fn manual_pause_records_user_reason() {
+        let mut t = default_timer();
+        t.start(0);
+        t.mark_wall(1_000);
+        t.pause_at(200, 1_200);
+        assert_eq!(t.snapshot().pause_reason, Some(PauseReason::User));
     }
 }

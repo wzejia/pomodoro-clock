@@ -1,9 +1,9 @@
 //! 番茄统计：记录、聚合、JSON 持久化。
-//! 存储为纯 JSON 数组，便携优先；聚合逻辑全部在 Rust 侧，便于测试。
+//! 文件是带 `version` 的对象（旧文件没有 version，按 v1 读）。聚合逻辑全部在 Rust 侧。
 
 use chrono::{Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PomodoroRecord {
@@ -11,11 +11,34 @@ pub struct PomodoroRecord {
     pub completed_at: i64,
     /// 本次专注时长（秒）
     pub duration_secs: u64,
+    /// 这一轮「正在做」的标题。旧记录没有该字段。
+    #[serde(default)]
+    pub focus_label: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+fn schema_version() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsStore {
+    /// 缺省按 v1 读。当前写入也是 1。
+    #[serde(default = "schema_version")]
+    pub version: u32,
     pub records: Vec<PomodoroRecord>,
+    /// 解析失败且备份也失败时为 true，`save` 拒绝覆盖原文件。
+    #[serde(skip, default)]
+    quarantine_failed: bool,
+}
+
+impl Default for StatsStore {
+    fn default() -> Self {
+        Self {
+            version: schema_version(),
+            records: Vec::new(),
+            quarantine_failed: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,33 +70,68 @@ pub struct MonthSummary {
 }
 
 impl StatsStore {
-    /// 从文件加载；文件不存在或损坏时返回空库（不崩）
+    /// 文件不存在时返回空库。解析失败时把原文件备份成带时间戳的 `.corrupt`，
+    /// 内存用空库，且不会在这次加载里用空库覆盖原文件。备份失败则拒绝之后的 save。
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Self::default(),
+        let text = match std::fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Self::default(),
+            Err(e) => {
+                eprintln!("[stats] 读取失败（{e}），尝试把原文件备份后再放弃");
+                return Self::after_failed_read(path);
+            }
+        };
+        match serde_json::from_str::<Self>(&text) {
+            Ok(store) => store,
+            Err(e) => {
+                eprintln!("[stats] 解析失败（{e}）");
+                Self::after_failed_read(path)
+            }
+        }
+    }
+
+    /// 读不出或解析不了时，先把原字节挪走。挪不走就拒绝以后的 save。
+    fn after_failed_read(path: &Path) -> Self {
+        match crate::atomic_file::quarantine_corrupt(path) {
+            Ok(dest) => {
+                eprintln!(
+                    "[stats] 已备份到 {}，不会用空库覆盖原历史",
+                    dest.display()
+                );
+                Self::default()
+            }
+            Err(be) => {
+                eprintln!("[stats] 备份失败（{be}）。拒绝之后用空库覆盖原文件");
+                Self {
+                    quarantine_failed: true,
+                    ..Self::default()
+                }
+            }
         }
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
+        if self.quarantine_failed {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "stats.json 损坏且备份失败，拒绝用空库覆盖",
+            ));
         }
-        let tmp: PathBuf = path.with_extension("json.tmp");
         // 08-18 P2：序列化失败转 io::Error 走 ?，不在 save 路径 panic
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        crate::atomic_file::write_atomic(path, json.as_bytes())
     }
 
     pub fn add_record(&mut self, completed_at: i64, duration_secs: u64) {
+        self.add_labeled(completed_at, duration_secs, "");
+    }
+
+    pub fn add_labeled(&mut self, completed_at: i64, duration_secs: u64, focus_label: impl Into<String>) {
         self.records.push(PomodoroRecord {
             completed_at,
             duration_secs,
+            focus_label: focus_label.into(),
         });
     }
 
@@ -184,7 +242,7 @@ impl StatsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{Datelike, TimeZone};
 
     fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> i64 {
         Local
@@ -233,9 +291,15 @@ mod tests {
         s.add_record(t_t + 60, 25 * 60);
         let sum = s.summary(now);
         assert_eq!(sum.today_count, 2);
-        // 周视图里两天各在其位
+        let today_idx = today.weekday().num_days_from_monday() as usize;
+        assert_eq!(sum.week[today_idx].count, 2);
         let total_week: u32 = sum.week.iter().map(|b| b.count).sum();
-        assert_eq!(total_week, 3);
+        if today_idx == 0 {
+            assert_eq!(total_week, 2);
+        } else {
+            assert_eq!(sum.week[today_idx - 1].count, 1);
+            assert_eq!(total_week, 3);
+        }
     }
 
     #[test]
@@ -282,11 +346,40 @@ mod tests {
         let path = dir.join("stats.json");
         let mut s = StatsStore::default();
         s.add_record(1_700_000_000, 1500);
-        s.add_record(1_700_003_600, 1500);
+        s.add_labeled(1_700_003_600, 1500, "写方案");
         s.save(&path).unwrap();
         let loaded = StatsStore::load(&path);
+        assert_eq!(loaded.version, 1);
         assert_eq!(loaded.records.len(), 2);
         assert_eq!(loaded.records[0].completed_at, 1_700_000_000);
+        assert_eq!(loaded.records[0].focus_label, "");
+        assert_eq!(loaded.records[1].focus_label, "写方案");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"version\": 1"));
+        assert!(!path.with_extension("json.tmp").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn load_without_version_reads_as_v1() {
+        let dir = std::env::temp_dir().join(format!("pomodoro-nover-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stats.json");
+        std::fs::write(
+            &path,
+            r#"{"records":[{"completed_at":1700000000,"duration_secs":1500}]}"#,
+        )
+        .unwrap();
+        let loaded = StatsStore::load(&path);
+        assert_eq!(loaded.version, 1);
+        assert_eq!(loaded.records.len(), 1);
+        assert_eq!(loaded.records[0].duration_secs, 1500);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("records"));
+        assert!(
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .all(|e| !e.unwrap().file_name().to_string_lossy().contains("corrupt"))
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -298,13 +391,67 @@ mod tests {
     }
 
     #[test]
-    fn load_corrupt_file_returns_empty() {
+    fn load_corrupt_file_is_backed_up_and_not_overwritten() {
         let dir = std::env::temp_dir().join(format!("pomodoro-corrupt-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("stats.json");
-        std::fs::write(&path, "{ not valid json !!!").unwrap();
+        let original = "{ not valid json !!!";
+        std::fs::write(&path, original).unwrap();
         let s = StatsStore::load(&path);
         assert!(s.records.is_empty());
+        assert_eq!(s.version, 1);
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt"))
+            .collect();
+        assert_eq!(backups.len(), 1, "损坏文件必须留一份带时间戳的备份");
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), original);
+        // 原路径上不再是那份损坏内容；空库 save 只写新文件。
+        s.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("\"records\""));
+        assert!(!saved.contains("not valid"));
+        assert_eq!(std::fs::read_to_string(backups[0].path()).unwrap(), original);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn unreadable_bytes_are_backed_up_before_empty_save() {
+        let dir = std::env::temp_dir().join(format!("pomodoro-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stats.json");
+        let original = vec![0xFFu8, 0xFE, 0x00, 0x41];
+        std::fs::write(&path, &original).unwrap();
+        let s = StatsStore::load(&path);
+        assert!(s.records.is_empty());
+        let backups: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".corrupt"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(std::fs::read(backups[0].path()).unwrap(), original);
+        s.save(&path).unwrap();
+        assert_eq!(std::fs::read(backups[0].path()).unwrap(), original);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("records"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn save_refuses_when_backup_failed_and_keeps_bytes() {
+        let dir = std::env::temp_dir().join(format!("pomodoro-nobackup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stats.json");
+        let original = b"{ not valid json !!!";
+        std::fs::write(&path, original).unwrap();
+        let loaded = {
+            let _guard = crate::atomic_file::block_quarantine(&path);
+            StatsStore::load(&path)
+        };
+        let save_result = loaded.save(&path);
+        assert!(save_result.is_err(), "备份失败后必须拒绝保存");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_dir_all(&dir).ok();
     }
 
