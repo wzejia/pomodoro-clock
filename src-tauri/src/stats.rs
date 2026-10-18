@@ -445,14 +445,11 @@ mod tests {
         let path = dir.join("stats.json");
         let original = b"{ not valid json !!!";
         std::fs::write(&path, original).unwrap();
-        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-        perms.set_readonly(true);
-        std::fs::set_permissions(&dir, perms).unwrap();
-        let loaded = StatsStore::load(&path);
+        let loaded = {
+            let _guard = crate::atomic_file::block_quarantine(&path);
+            StatsStore::load(&path)
+        };
         let save_result = loaded.save(&path);
-        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-        perms.set_readonly(false);
-        std::fs::set_permissions(&dir, perms).unwrap();
         assert!(save_result.is_err(), "备份失败后必须拒绝保存");
         assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_dir_all(&dir).ok();

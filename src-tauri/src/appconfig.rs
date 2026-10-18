@@ -545,13 +545,10 @@ mod tests {
         let path = dir.join("config.json");
         let original = b"{ not valid json !!!";
         std::fs::write(&path, original).unwrap();
-        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-        perms.set_readonly(true);
-        std::fs::set_permissions(&dir, perms).unwrap();
-        let loaded = AppConfig::load_reported(&path);
-        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
-        perms.set_readonly(false);
-        std::fs::set_permissions(&dir, perms).unwrap();
+        let loaded = {
+            let _guard = crate::atomic_file::block_quarantine(&path);
+            AppConfig::load_reported(&path)
+        };
         assert!(loaded.save_blocked, "备份失败时必须禁止覆盖");
         assert_eq!(std::fs::read(&path).unwrap(), original);
         std::fs::remove_dir_all(&dir).ok();

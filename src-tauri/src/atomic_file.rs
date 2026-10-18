@@ -67,6 +67,61 @@ pub fn quarantine_corrupt(path: &Path) -> std::io::Result<PathBuf> {
     }
 }
 
+/// 测试辅助：制造「隔离必败」的现场，验证调用方不覆盖原文件。drop 时还原。
+///
+/// Unix：把父目录设为只读，rename/copy 建目标都 EACCES。
+/// Windows：目录只读不阻止写入（实测 rename 照样成功）；且 Rust 1.96 std 的
+/// File::open 默认 share 含 DELETE，持句柄也挡不住 rename——所以显式
+/// share_mode(READ|WRITE) 排除 DELETE：rename/remove_file 都要 DELETE 权限 → 必败；
+/// copy 只读源文件不受影响，会走到 remove_file 失败分支，照样返回 Err。
+#[cfg(test)]
+pub(crate) struct QuarantineGuard {
+    #[cfg_attr(windows, allow(dead_code))]
+    dir: PathBuf,
+    #[cfg(windows)]
+    _lock: std::fs::File,
+}
+
+#[cfg(test)]
+pub(crate) fn block_quarantine(path: &Path) -> QuarantineGuard {
+    let dir = path
+        .parent()
+        .expect("测试路径必须有父目录")
+        .to_path_buf();
+    #[cfg(unix)]
+    {
+        let mut perms = std::fs::metadata(&dir).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&dir, perms).unwrap();
+        QuarantineGuard { dir }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_SHARE_READ: u32 = 0x1;
+        const FILE_SHARE_WRITE: u32 = 0x2;
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .open(path)
+            .unwrap();
+        QuarantineGuard { dir, _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for QuarantineGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let mut perms = std::fs::metadata(&self.dir).unwrap().permissions();
+            perms.set_readonly(false);
+            std::fs::set_permissions(&self.dir, perms).unwrap();
+        }
+        // Windows：_lock 随 struct drop，句柄释放即还原。
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
