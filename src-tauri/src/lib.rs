@@ -1,4 +1,5 @@
 mod appconfig;
+mod atomic_file;
 mod stats;
 mod timer;
 
@@ -8,7 +9,9 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_notification::NotificationExt;
-use timer::{Phase, Status, Timer, TimerSnapshot};
+use std::sync::OnceLock;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use timer::{Phase, Sample, Status, Timer, TimerSnapshot};
 
 /// stats.json 放 exe 同目录（便携优先）；取不到则退回当前目录
 fn stats_path() -> PathBuf {
@@ -50,11 +53,22 @@ struct TickPayload {
     snapshot: TimerSnapshot,
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+/// 进程内单调毫秒。倒计时只减这个，不受校时、NTP 回拨影响。
+fn mono_ms() -> u64 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    ORIGIN.get_or_init(Instant::now).elapsed().as_millis() as u64
+}
+
+/// 墙钟只用来发现睡眠/校时跳变，不参与扣剩余时间。
+fn wall_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+fn anchor_running(timer: &mut Timer) {
+    timer.mark_wall(wall_ms());
 }
 
 fn write_config(state: &AppState) {
@@ -87,20 +101,22 @@ fn main_is_visible(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-/// 阶段完成后的统一处理：落统计（仅工作番茄）、存盘、发系统通知
+/// 阶段完成后的统一处理：落统计（仅工作番茄）、存盘、发系统通知。
+/// 记入统计的时长是刚结束阶段锁定的 `phase_total_ms`，不是当前配置里的工作时长。
 fn on_phase_completed(app: &AppHandle, state: &AppState, ev: timer::PhaseCompleted) {
-    let (cfg, work_secs) = {
-        let timer = state.timer.lock().unwrap();
-        (*timer.config(), timer.work_duration_secs())
-    };
     if ev.from == Phase::Work {
         let mut stats = state.stats.lock().unwrap();
-        stats.add_record(chrono::Local::now().timestamp(), work_secs);
+        stats.add_record(chrono::Local::now().timestamp(), ev.phase_total_ms / 1000);
         if let Err(e) = stats.save(&stats_path()) {
             eprintln!("[stats] 保存失败: {e}");
         }
-        persist(state, || {});
     }
+    let cfg = {
+        let timer = state.timer.lock().unwrap();
+        *timer.config()
+    };
+    // 下一阶段（含自动开跑或停表等待）一并落盘，崩溃后能恢复到新阶段而不是旧的剩余时间。
+    persist(state, || {});
     let short_min = (cfg.short_break_ms / 60_000).max(1);
     let long_min = (cfg.long_break_ms / 60_000).max(1);
     let every = cfg.long_break_every.max(1);
@@ -127,22 +143,30 @@ fn commit_timer(app: &AppHandle, state: &AppState, f: impl FnOnce(&mut Timer)) -
         t.snapshot()
     };
     emit_snapshot(app, &snap);
+    // 开始/暂停/重置/跳过都改变可恢复状态，立刻落盘。
+    persist(state, || {});
     snap
 }
 
 #[tauri::command]
 fn timer_start(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
-    commit_timer(&app, &state, |t| t.start(now_ms()))
+    commit_timer(&app, &state, |t| {
+        t.start(mono_ms());
+        anchor_running(t);
+    })
 }
 
 #[tauri::command]
 fn timer_pause(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
-    commit_timer(&app, &state, |t| t.pause(now_ms()))
+    commit_timer(&app, &state, |t| t.pause_at(mono_ms(), wall_ms()))
 }
 
 #[tauri::command]
 fn timer_resume(app: AppHandle, state: State<AppState>) -> TimerSnapshot {
-    commit_timer(&app, &state, |t| t.resume(now_ms()))
+    commit_timer(&app, &state, |t| {
+        t.resume(mono_ms());
+        anchor_running(t);
+    })
 }
 
 #[tauri::command]
@@ -162,9 +186,15 @@ fn timer_snapshot(state: State<AppState>) -> TimerSnapshot {
 
 fn toggle_in_place(timer: &mut Timer) {
     match timer.snapshot().status {
-        Status::Running => timer.pause(now_ms()),
-        Status::Paused => timer.resume(now_ms()),
-        Status::Idle => timer.start(now_ms()),
+        Status::Running => timer.pause_at(mono_ms(), wall_ms()),
+        Status::Paused => {
+            timer.resume(mono_ms());
+            anchor_running(timer);
+        }
+        Status::Idle => {
+            timer.start(mono_ms());
+            anchor_running(timer);
+        }
     }
 }
 
@@ -240,12 +270,14 @@ struct HotkeyState {
 fn current_appconfig(state: &AppState) -> AppConfig {
     let timer = state.timer.lock().unwrap();
     AppConfig {
+        version: appconfig::SCHEMA_VERSION,
         timer: *timer.config(),
         completed_work_count: timer.completed_count(),
         material: *state.material.lock().unwrap(),
         hotkey: state.hotkey.lock().unwrap().clone(),
         colors: state.colors.lock().unwrap().clone(),
         theme: *state.theme.lock().unwrap(),
+        session: Some(timer.session()),
     }
 }
 
@@ -546,14 +578,54 @@ mod morph {
     }
 }
 
+fn clamp_i32(v: i32, lo: i32, hi: i32) -> i32 {
+    v.max(lo).min(hi.max(lo))
+}
+
+/// 非 Windows（以及 Windows 上拿不到 hwnd 时）用 Tauri monitor 的工作区钳制窗口。
+/// 取不到显示器时只改尺寸，偏移返回 (0, 0)，并记日志。
+fn morph_with_monitor(window: &tauri::WebviewWindow, to_w: f64, to_h: f64) -> (f64, f64) {
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let scale = if scale > 0.0 { scale } else { 1.0 };
+    let Ok(origin) = window.outer_position() else {
+        let _ = window.set_size(tauri::LogicalSize::new(to_w, to_h));
+        return (0.0, 0.0);
+    };
+    let new_w = (to_w * scale).round() as i32;
+    let new_h = (to_h * scale).round() as i32;
+    let mut nx = origin.x;
+    let mut ny = origin.y;
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten());
+    if let Some(mon) = monitor {
+        let wa = mon.work_area();
+        let left = wa.position.x;
+        let top = wa.position.y;
+        let right = left.saturating_add(wa.size.width as i32);
+        let bottom = top.saturating_add(wa.size.height as i32);
+        nx = clamp_i32(origin.x, left, right - new_w);
+        ny = clamp_i32(origin.y, top, bottom - new_h);
+    } else {
+        eprintln!("[morph] 没有取到显示器工作区，只改尺寸，不钳位置");
+    }
+    let _ = window.set_position(tauri::PhysicalPosition::new(nx, ny));
+    let _ = window.set_size(tauri::LogicalSize::new(to_w, to_h));
+    (
+        (origin.x - nx) as f64 / scale,
+        (origin.y - ny) as f64 / scale,
+    )
+}
+
 #[tauri::command]
 fn morph_begin(window: tauri::WebviewWindow, width: f64, height: f64) -> (f64, f64) {
     #[cfg(windows)]
     if let Ok(hwnd) = window.hwnd() {
         return morph::begin(hwnd.0 as isize, width, height);
     }
-    #[allow(unreachable_code)]
-    (0.0, 0.0)
+    morph_with_monitor(&window, width, height)
 }
 
 /* ---------------- 托盘自绘菜单定位（v11）：纯函数可单测 ---------------- */
@@ -583,12 +655,35 @@ pub mod traymenu {
         (x, y)
     }
 
-    /// 含某点的显示器工作区（物理 px）；失败回退主屏全屏矩形并记日志（不崩不弹窗）
-    #[cfg(not(windows))]
-    pub fn work_area_of_point(_px: i32, _py: i32) -> (i32, i32, i32, i32) {
-        (0, 0, 1920, 1080)
+    /// 物理像素矩形 (left, top, right, bottom)。
+    pub fn work_area_rect(x: i32, y: i32, width: u32, height: u32) -> (i32, i32, i32, i32) {
+        (
+            x,
+            y,
+            x.saturating_add(width as i32),
+            y.saturating_add(height as i32),
+        )
     }
 
+    /// 点落在某块工作区内就用它；否则选中心最近的一块。空列表返回 None。
+    pub fn pick_work_area(px: i32, py: i32, areas: &[(i32, i32, i32, i32)]) -> Option<(i32, i32, i32, i32)> {
+        if let Some(hit) = areas
+            .iter()
+            .copied()
+            .find(|&a| px >= a.0 && py >= a.1 && px < a.2 && py < a.3)
+        {
+            return Some(hit);
+        }
+        areas.iter().copied().min_by_key(|a| {
+            let cx = (a.0 as i64 + a.2 as i64) / 2;
+            let cy = (a.1 as i64 + a.3 as i64) / 2;
+            let dx = cx - px as i64;
+            let dy = cy - py as i64;
+            dx * dx + dy * dy
+        })
+    }
+
+    /// 含某点的显示器工作区（物理 px）；失败回退主屏全屏矩形并记日志（不崩不弹窗）
     #[cfg(windows)]
     pub fn work_area_of_point(px: i32, py: i32) -> (i32, i32, i32, i32) {
         #[link(name = "user32")]
@@ -660,6 +755,46 @@ pub mod traymenu {
             let (x, y) = menu_origin((944, 1000, 976, 1032), (0, 0, 1920, 1040), 160, 124);
             assert_eq!((x, y), (880, 870)); // x=960-80
         }
+
+        #[test]
+        fn pick_work_area_hits_the_monitor_containing_the_point() {
+            let areas = [(0, 0, 1920, 1080), (1920, 0, 3840, 1080)];
+            assert_eq!(super::pick_work_area(2000, 40, &areas), Some(areas[1]));
+        }
+
+        #[test]
+        fn pick_work_area_uses_nearest_when_point_is_outside() {
+            let areas = [(0, 0, 800, 600), (2000, 0, 2800, 600)];
+            assert_eq!(super::pick_work_area(1500, 10, &areas), Some(areas[1]));
+            assert_eq!(super::pick_work_area(10, 10, &[]), None);
+        }
+    }
+}
+
+/// 托盘图标所在显示器的工作区（物理 px，left/top/right/bottom）。
+/// Windows 走 Win32。其他平台用 Tauri 的 monitor API；都取不到时才回退 1920×1080。
+fn tray_work_area(app: &AppHandle, px: i32, py: i32) -> (i32, i32, i32, i32) {
+    #[cfg(windows)]
+    {
+        return traymenu::work_area_of_point(px, py);
+    }
+    #[cfg(not(windows))]
+    {
+        let rect_of = |m: &tauri::Monitor| {
+            let wa = m.work_area();
+            traymenu::work_area_rect(wa.position.x, wa.position.y, wa.size.width, wa.size.height)
+        };
+        if let Ok(Some(monitor)) = app.monitor_from_point(px as f64, py as f64) {
+            return rect_of(&monitor);
+        }
+        if let Ok(list) = app.available_monitors() {
+            let areas: Vec<_> = list.iter().map(rect_of).collect();
+            if let Some(area) = traymenu::pick_work_area(px, py, &areas) {
+                return area;
+            }
+        }
+        eprintln!("[tray-menu] 没有取到显示器工作区，回退 1920x1080");
+        (0, 0, 1920, 1080)
     }
 }
 
@@ -668,7 +803,9 @@ fn morph_commit(window: tauri::WebviewWindow, width: f64, height: f64) {
     #[cfg(windows)]
     if let Ok(hwnd) = window.hwnd() {
         morph::commit(hwnd.0 as isize, width, height);
+        return;
     }
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -727,6 +864,14 @@ pub fn run() {
             let appcfg = AppConfig::load(&config_path());
             let mut timer = Timer::new(appcfg.timer);
             timer.restore_completed(appcfg.completed_work_count);
+            // 运行中被杀掉的番茄恢复成暂停：关机期间不算专注。
+            let resume_as_paused = appcfg
+                .session
+                .as_ref()
+                .is_some_and(|s| s.status == Status::Running);
+            if let Some(session) = appcfg.session {
+                timer.restore_session(session);
+            }
             app.manage(AppState {
                 timer: Mutex::new(timer),
                 stats: Mutex::new(stats),
@@ -737,6 +882,11 @@ pub fn run() {
                 hotkey_effective: Mutex::new(None),
                 persist: Mutex::new(()),
             });
+            if resume_as_paused {
+                eprintln!("[timer] 上次仍在计时，已恢复为暂停；退出期间不计入专注");
+                let state = app.state::<AppState>();
+                persist(&state, || {});
+            }
 
             // ---------- 托盘自绘菜单窗（v11 弃用原生 muda 菜单）：hidden 启动，右键托盘图标贴图标弹出 ----------
             let mut menu_builder = tauri::WebviewWindowBuilder::new(
@@ -811,7 +961,8 @@ pub fn run() {
                                     (pos.x + size.width) as i32,
                                     (pos.y + size.height) as i32,
                                 );
-                                let work = traymenu::work_area_of_point(
+                                let work = tray_work_area(
+                                    app,
                                     (icon.0 + icon.2) / 2,
                                     (icon.1 + icon.3) / 2,
                                 );
@@ -870,29 +1021,56 @@ pub fn run() {
             }
 
             // 计时驱动线程：唯一 tick 来源，250ms 粒度。
+            // 倒计时用单调时钟；墙钟只用来识别睡眠/校时。间隔超过几秒则自动暂停，不把这段算专注。
+            // 运行中每 5 秒把剩余时间落盘。更勤会让 sync_all 拖住 tick，崩溃最多丢这 5 秒（恢复时还回去）。
             // 08-18 R2：本线程是唯一计时驱动源，任何 panic 若炸掉线程 = 计时器无声冻结——
             // catch_unwind 兜底记日志后继续循环；锁毒化降级取数据（好过整计时冻结）。
             let handle = app.handle().clone();
-            std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-                let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let state = handle.state::<AppState>();
-                    let (ev, snap) = {
-                        // 毒锁：持有期间 panic 过的 mutex——into_inner 取回数据继续用
-                        let mut t = match state.timer.lock() {
-                            Ok(g) => g,
-                            Err(poisoned) => poisoned.into_inner(),
+            std::thread::spawn(move || {
+                let mut last_checkpoint = Instant::now();
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    let tick_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let state = handle.state::<AppState>();
+                        let sample = {
+                            // 毒锁：持有期间 panic 过的 mutex——into_inner 取回数据继续用
+                            let mut t = match state.timer.lock() {
+                                Ok(g) => g,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                            let sample = t.sample(mono_ms(), wall_ms());
+                            let snap = t.snapshot();
+                            drop(t);
+                            let _ = handle.emit("timer-tick", TickPayload { snapshot: snap });
+                            sample
                         };
-                        let ev = t.tick(now_ms());
-                        (ev, t.snapshot())
-                    };
-                    let _ = handle.emit("timer-tick", TickPayload { snapshot: snap });
-                    if let Some(ev) = ev {
-                        on_phase_completed(&handle, &state, ev);
+                        let mut saved = false;
+                        match sample {
+                            Sample::Ticked(Some(ev)) => {
+                                on_phase_completed(&handle, &state, ev);
+                                saved = true;
+                            }
+                            Sample::AutoPaused => {
+                                persist(&state, || {});
+                                saved = true;
+                            }
+                            Sample::Ticked(None) if last_checkpoint.elapsed() >= std::time::Duration::from_secs(5) => {
+                                persist(&state, || {});
+                                saved = true;
+                            }
+                            Sample::Ticked(None) | Sample::Idle => {}
+                        }
+                        if saved {
+                            // 刷盘耗时不计入专注，也避免慢磁盘把下一次间隔判成睡眠。
+                            if let Ok(mut t) = state.timer.lock() {
+                                t.reanchor(mono_ms(), wall_ms());
+                            }
+                            last_checkpoint = Instant::now();
+                        }
+                    }));
+                    if tick_result.is_err() {
+                        eprintln!("[tick] 计时线程一轮 panic，已兜底继续（详见上方 panic 输出）");
                     }
-                }));
-                if tick_result.is_err() {
-                    eprintln!("[tick] 计时线程一轮 panic，已兜底继续（详见上方 panic 输出）");
                 }
             });
             Ok(())
@@ -955,4 +1133,18 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod clock_tests {
+    use super::mono_ms;
+
+    #[test]
+    fn monotonic_clock_moves_forward() {
+        let a = mono_ms();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        let b = mono_ms();
+        assert!(b >= a, "单调时钟回拨：{a} -> {b}");
+        assert!(b - a < 5_000, "采样间隔异常偏大：{}", b - a);
+    }
 }

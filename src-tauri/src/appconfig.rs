@@ -3,7 +3,13 @@
 //! 因此旧版 config.json（无 material 键）加载后 material 取默认 LiquidGlass，
 //! 且 set_config 保存时不会再丢掉材质键（v6.1 之前 TimerConfig::save 直写会丢）。
 
-use crate::timer::TimerConfig;
+use crate::timer::{TimerConfig, TimerSession};
+
+pub const SCHEMA_VERSION: u32 = 1;
+
+fn schema_version() -> u32 {
+    SCHEMA_VERSION
+}
 
 /// 界面材质：经典（实心毛玻璃拟态，v6 观感）/ 液态玻璃（iOS 26 拟态，默认）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -101,6 +107,9 @@ impl HotkeyConfig {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
+    /// 缺省按 v1 读。当前写入也是 1。
+    #[serde(default = "schema_version")]
+    pub version: u32,
     #[serde(flatten)]
     pub timer: TimerConfig,
     pub material: Material,
@@ -110,17 +119,22 @@ pub struct AppConfig {
     pub theme: Theme,
     /// 本组已完成的工作番茄。今日个数在 stats.json，这是圆点和长休间隔的进度。
     pub completed_work_count: u32,
+    /// 进行中的阶段。旧文件没有该字段时为 None，启动不恢复。
+    #[serde(default)]
+    pub session: Option<TimerSession>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            version: SCHEMA_VERSION,
             timer: TimerConfig::default(),
             material: Material::default(),
             hotkey: HotkeyConfig::default(),
             colors: Colors::default(),
             theme: Theme::default(),
             completed_work_count: 0,
+            session: None,
         }
     }
 }
@@ -179,6 +193,8 @@ impl AppConfig {
         scrub_bad_field::<Colors>(obj, "colors");
         scrub_bad_field::<Theme>(obj, "theme");
         scrub_bad_field::<u32>(obj, "completed_work_count");
+        scrub_bad_field::<u32>(obj, "version");
+        scrub_bad_field::<TimerSession>(obj, "session");
         match serde_json::from_value::<Self>(value) {
             Ok(mut cfg) => {
                 cfg.normalize();
@@ -192,18 +208,10 @@ impl AppConfig {
     }
 
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)?;
-            }
-        }
-        let tmp = path.with_extension("json.tmp");
         // 08-18 P2：序列化失败转 io::Error 走 ?，不在 save 路径 panic
         let json = serde_json::to_string_pretty(self)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        std::fs::write(&tmp, json)?;
-        std::fs::rename(&tmp, path)?;
-        Ok(())
+        crate::atomic_file::write_atomic(path, json.as_bytes())
     }
 }
 
@@ -224,6 +232,7 @@ mod tests {
         let dir = tmpdir("roundtrip");
         let path = dir.join("config.json");
         let cfg = AppConfig {
+            version: SCHEMA_VERSION,
             timer: TimerConfig {
                 work_ms: 30 * MIN,
                 short_break_ms: 10 * MIN,
@@ -241,6 +250,12 @@ mod tests {
             },
             theme: Theme::Dark,
             completed_work_count: 2,
+            session: Some(TimerSession {
+                phase: crate::timer::Phase::Work,
+                status: crate::timer::Status::Paused,
+                phase_total_ms: 30 * MIN,
+                remaining_ms: 12 * MIN,
+            }),
         };
         cfg.save(&path).unwrap();
         let loaded = AppConfig::load(&path);
@@ -421,6 +436,42 @@ mod tests {
         assert_eq!(loaded.timer.daily_goal, 20);
         assert_eq!(loaded.theme, Theme::Light);
         assert_eq!(loaded.completed_work_count, 0);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(loaded.session, None);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn legacy_config_without_version_reads_as_v1() {
+        let dir = tmpdir("legacy-version");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"work_ms": 1800000, "short_break_ms": 300000, "long_break_ms": 900000,
+                "long_break_every": 4, "auto_start_next": false}"#,
+        )
+        .unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
+        assert_eq!(loaded.session, None);
+        assert_eq!(loaded.timer.work_ms, 30 * MIN);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn corrupt_session_field_keeps_the_rest() {
+        let dir = tmpdir("bad-session");
+        let path = dir.join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"work_ms":1800000,"short_break_ms":300000,"long_break_ms":900000,"long_break_every":4,"auto_start_next":true,"session":"nope"}"#,
+        )
+        .unwrap();
+        let loaded = AppConfig::load(&path);
+        assert_eq!(loaded.timer.work_ms, 30 * MIN);
+        assert!(loaded.timer.auto_start_next);
+        assert_eq!(loaded.session, None);
+        assert_eq!(loaded.version, SCHEMA_VERSION);
         std::fs::remove_dir_all(&dir).ok();
     }
 }

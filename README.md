@@ -2,6 +2,8 @@
 
 一个简洁、好用的 Windows 桌面番茄时钟。安装包只有 2 MB，迷你胶囊常驻桌面，专注/休息自动流转，统计全部本地保存——无账号、无云端、无打扰。
 
+当前只正式支持 **Windows 10/11（64 位）**。安装包、系统托盘、全局热键和拖拽跟随都以 Windows 为准。macOS / Linux 可以编译计时与统计逻辑，不在支持范围内。
+
 ## 功能
 
 - **迷你胶囊悬浮窗**：无边框、置顶、可拖拽；倒计时 + 阶段色标签 + 播放/暂停；底部 2px 细进度条实时显示阶段进度
@@ -47,11 +49,13 @@
 
 ```bash
 bun install
-bun run tauri dev      # 开发调试
+bun run tauri dev      # 开发调试（正式环境是 Windows）
 bun run tauri build    # 产出 NSIS 安装包
 ```
 
-测试：`cd src-tauri && cargo test --lib`（58 个），前端 `bun test`。
+非 Windows 上如果要看界面，窗口展开的防出屏和托盘菜单位置会走 Tauri 的显示器工作区。系统没有报告任何显示器时，才回退到 1920×1080。拖拽跟随光标只在 Windows 实现。
+
+测试：`cd src-tauri && cargo test --lib`（74 个），前端 `bun test`。CI 在 Ubuntu 上跑 Rust 与前端，并在 `windows-latest` 上编译运行 `cargo test --lib`，用来覆盖 `cfg(windows)` 代码。
 
 ## 结构
 

@@ -21,6 +21,8 @@ export interface PhaseCompleted {
   from: Phase;
   to: Phase;
   completed_work_count: number;
+  /** 刚结束阶段锁定的满时长（毫秒）。统计用它，不用当前配置。 */
+  phase_total_ms: number;
 }
 
 export type Material = "classic" | "liquid_glass";
@@ -45,6 +47,13 @@ export interface TimerConfig {
   colors: PhaseColors;
   theme: ThemeName;
   completed_work_count: number;
+  version: number;
+  session: {
+    phase: Phase;
+    status: Status;
+    phase_total_ms: number;
+    remaining_ms: number;
+  } | null;
 }
 
 export interface DayBar { date: string; count: number; minutes: number; }
@@ -214,6 +223,10 @@ function createMockBridge(): Bridge {
             hotkey: { enabled: hotkeyEnabled, shortcut: hotkeyShortcut },
             colors: { ...mockColors },
             theme, completed_work_count: completed,
+            version: 1,
+            session: {
+              phase, status, phase_total_ms: phaseTotal, remaining_ms: remaining,
+            },
           } satisfies TimerConfig;
         case "set_theme":
           theme = (args?.theme as ThemeName) ?? theme;

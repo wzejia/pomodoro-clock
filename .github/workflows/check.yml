@@ -13,6 +13,14 @@ jobs:
       - run: cargo test --lib
         working-directory: src-tauri
 
+  rust-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --lib
+        working-directory: src-tauri
+
   web:
     runs-on: ubuntu-latest
     steps:
