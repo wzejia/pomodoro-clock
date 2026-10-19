@@ -352,6 +352,15 @@ input:focus-visible {
 [data-theme="dark"] .week-day,
 [data-theme="dark"] .focus-label,
 [data-theme="dark"] .pause-note { color: #c7c7cc; }
+/* 全局 input:focus-visible 是 2px 系统蓝框。这个字段是计时下方的一行标题，
+   整宽蓝框和面板的无边框文字冲突。焦点只留系统蓝插入符。 */
+.focus-label:focus,
+.focus-label:focus-visible {
+  outline: none;
+  box-shadow: none;
+  caret-color: var(--accent);
+  color: var(--text);
+}
 .pause-note {
   margin: -4px 0 8px;
   font-size: 13px;
