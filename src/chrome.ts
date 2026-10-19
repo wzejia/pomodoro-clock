@@ -97,13 +97,17 @@ export function bindChrome(opts: { onMenuOpened: () => void; onDismiss: () => vo
     }
   });
   $("btn-collapse").addEventListener("click", () => collapseToMini());
+  $("btn-settings").addEventListener("click", (e) => {
+    e.stopPropagation();
+    openSettings();
+  });
   $("btn-drawer-back").addEventListener("click", (e) => {
     e.stopPropagation();
     closeDrawer();
   });
   app.addEventListener("contextmenu", (e) => {
     e.preventDefault();
-    if (!isExpanded() || drawerOpen || colorOpen || hotkeyOpen) return;
+    if (drawerOpen || colorOpen || hotkeyOpen) return;
     openMenu(e.clientX, e.clientY);
   });
   document.addEventListener("pointerdown", (e) => {
@@ -121,15 +125,98 @@ export function bindChrome(opts: { onMenuOpened: () => void; onDismiss: () => vo
   syncInert();
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function boxesOverlap(a: DOMRect, left: number, top: number, width: number, height: number) {
+  return left < a.right && left + width > a.left && top < a.bottom && top + height > a.top;
+}
+
+/** 迷你态面板被 visibility / opacity 藏起时，时钟和主键不算可见遮挡。 */
+function isShown(el: HTMLElement | null): el is HTMLElement {
+  if (!el) return false;
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
+  }
+  const box = el.getBoundingClientRect();
+  return box.width > 0 && box.height > 0;
+}
+
+function shownGuards(): DOMRect[] {
+  return [$("panel-time"), $("btn-primary")].filter(isShown).map((el) => el.getBoundingClientRect());
+}
+
+function placeNearClick(x: number, y: number, mw: number, mh: number) {
+  const box = app.getBoundingClientRect();
+  const inset = 4;
+  return {
+    left: clamp(x, box.left + inset, Math.max(box.left + inset, box.right - mw - inset)),
+    top: clamp(y, box.top + inset, Math.max(box.top + inset, box.bottom - mh - inset)),
+  };
+}
+
+/** 贴卡片右缘 8px，纵向先夹进卡片，再让开与菜单横向相交的时钟和主键。 */
+function placeTrailing(clickY: number, mw: number, mh: number, obstacles: DOMRect[]) {
+  const box = app.getBoundingClientRect();
+  const inset = 8;
+  const left = Math.max(box.left + inset, box.right - mw - inset);
+  const minTop = box.top + inset;
+  const maxTop = Math.max(minTop, box.bottom - mh - inset);
+  const preferred = clamp(clickY, minTop, maxTop);
+  return { left, top: clearTop(preferred, minTop, maxTop, left, mw, mh, obstacles) };
+}
+
+function clearTop(
+  preferred: number,
+  minTop: number,
+  maxTop: number,
+  left: number,
+  mw: number,
+  mh: number,
+  obstacles: DOMRect[],
+) {
+  const hits = (top: number) => obstacles.some((r) => boxesOverlap(r, left, top, mw, mh));
+  if (!hits(preferred)) return preferred;
+
+  // top 落在 (rect.top - mh, rect.bottom) 就会盖住该区域；两侧各让 1px，避免亚像素贴边。
+  const blocked: Array<[number, number]> = [];
+  for (const r of obstacles) {
+    if (r.right <= left || r.left >= left + mw) continue;
+    blocked.push([r.top - mh - 1, r.bottom + 1]);
+  }
+  blocked.sort((a, b) => a[0] - b[0]);
+  const merged: Array<[number, number]> = [];
+  for (const span of blocked) {
+    const last = merged[merged.length - 1];
+    if (!last || span[0] > last[1]) merged.push([span[0], span[1]]);
+    else last[1] = Math.max(last[1], span[1]);
+  }
+
+  const options: number[] = [];
+  let start = minTop;
+  for (const [blockStart, blockEnd] of merged) {
+    const gapEnd = Math.min(maxTop, blockStart);
+    if (gapEnd >= start) options.push(clamp(preferred, start, gapEnd));
+    start = Math.max(start, blockEnd);
+  }
+  if (start <= maxTop) options.push(clamp(preferred, start, maxTop));
+
+  const clear = options.filter((top) => !hits(top));
+  if (!clear.length) return preferred;
+  return clear.reduce((best, top) => (Math.abs(top - preferred) < Math.abs(best - preferred) ? top : best));
+}
+
 function openMenu(x: number, y: number) {
   menuOpen = true;
   ctxMenu.classList.add("open");
   const mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
-  const left = Math.max(4, Math.min(x, window.innerWidth - mw - 4));
-  const top = Math.max(4, Math.min(y, window.innerHeight - mh - 4));
-  ctxMenu.style.left = `${left}px`;
-  ctxMenu.style.top = `${top}px`;
-  ctxMenu.style.transformOrigin = `${x - left + 8}px ${y - top + 8}px`;
+  const guards = shownGuards();
+  const spot = guards.length ? placeTrailing(y, mw, mh, guards) : placeNearClick(x, y, mw, mh);
+  ctxMenu.style.left = `${spot.left}px`;
+  ctxMenu.style.top = `${spot.top}px`;
+  ctxMenu.style.transformOrigin = `${x - spot.left + 8}px ${y - spot.top + 8}px`;
   ctxMenu.setAttribute("aria-hidden", "false");
   syncInert();
   onMenuOpened();

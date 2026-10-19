@@ -20,7 +20,9 @@ const btnToggleRun = $("btn-toggle-run") as HTMLButtonElement;
 const iconPlay = $("icon-play") as unknown as SVGElement;
 const iconPause = $("icon-pause") as unknown as SVGElement;
 const btnPrimary = $("btn-primary") as HTMLButtonElement;
-const switchLabel = $("btn-switch").querySelector(".switch-label") as HTMLElement;
+const switchBtn = $("btn-switch") as HTMLButtonElement;
+const switchLabel = switchBtn.querySelector(".switch-label") as HTMLElement;
+const SKIP_HINT = "跳过本阶段，本次不计入";
 const cycleDots = $("cycle-dots");
 const pillProgressBar = $("pill-progress-bar");
 
@@ -88,8 +90,9 @@ export function render(s: TimerSnapshot) {
   btnPrimary.textContent = label;
   btnToggleRun.title = label;
   btnToggleRun.setAttribute("aria-label", label);
-  const toBreak = s.phase === "work";
-  switchLabel.textContent = toBreak ? "休息" : "专注";
+  switchBtn.title = SKIP_HINT;
+  switchBtn.setAttribute("aria-label", SKIP_HINT);
+  switchLabel.textContent = "跳过";
 
   const fill = getComputedStyle(document.documentElement).getPropertyValue(PHASE_VAR[s.phase] ?? "--work").trim();
   if (fill) document.documentElement.style.setProperty("--on-phase", contrastingInk(fill));
@@ -139,5 +142,5 @@ export function bindSession() {
   $("btn-toggle-run").addEventListener("click", (e) => { e.stopPropagation(); toggleRun(); });
   $("btn-primary").addEventListener("click", () => toggleRun());
   $("btn-reset").addEventListener("click", () => resetPhase());
-  $("btn-switch").addEventListener("click", (e) => { e.stopPropagation(); skipPhase(); });
+  switchBtn.addEventListener("click", (e) => { e.stopPropagation(); skipPhase(); });
 }
