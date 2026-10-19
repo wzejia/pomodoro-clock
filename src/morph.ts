@@ -153,8 +153,8 @@ function paint(p: Pose) {
 function styleGlyph(pillScale: number, ns: number) {
   const span = 1 - pillScale;
   const u = span > 0.02 ? Math.min(1, Math.max(0, (ns - pillScale) / span)) : 1;
-  panelTime.style.fontWeight = String(Math.round(600 + (400 - 600) * u));
-  panelTime.style.letterSpacing = `${(0.02 + (-0.01 - 0.02) * u).toFixed(4)}em`;
+  panelTime.style.fontWeight = "600";
+  panelTime.style.letterSpacing = `${(0.02 + (-0.03 - 0.02) * u).toFixed(4)}em`;
   pillTime.style.opacity = "0";
 }
 

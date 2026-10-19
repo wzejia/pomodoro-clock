@@ -41,6 +41,13 @@ export function applyColors() {
       root.style.removeProperty(TEXT_VAR[k]);
     }
   });
+  // 默认态阶段名用主文字色（玻璃高光上相色字对比不足，PR#3）；
+  // 仅当用户自定义阶段色时，阶段名恢复跟随 --*-text，保住配色项的文字腿。
+  if ((Object.keys(customColors) as ColorKey[]).some((k) => customColors[k])) {
+    root.setAttribute("data-custom-phase", "");
+  } else {
+    root.removeAttribute("data-custom-phase");
+  }
 }
 
 function syncColorUI() {

@@ -146,11 +146,11 @@
                   <span class="toggle-knob"></span>
                 </button>
               </div>
-              <div class="setting-row">
-                <span>导出</span>
-                <button id="btn-export" class="btn" type="button">导出统计</button>
+              <div class="setting-row export-row">
+                <span id="export-label">导出统计</span>
+                <button id="btn-export" type="button" aria-labelledby="export-label">导出</button>
+                <p id="export-path" class="export-path" hidden></p>
               </div>
-              <p id="export-path" class="export-path" hidden></p>
               <div class="setting-row toggle-row">
                 <span>完成提示音</span>
                 <button id="toggle-sound" class="toggle on" role="switch" aria-checked="true" aria-label="完成提示音">
