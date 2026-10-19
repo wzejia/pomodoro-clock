@@ -108,6 +108,16 @@ export function bindChrome(opts: { onMenuOpened: () => void; onDismiss: () => vo
   app.addEventListener("contextmenu", (e) => {
     e.preventDefault();
     if (drawerOpen || colorOpen || hotkeyOpen) return;
+    // 迷你胶囊只有 76px，菜单放不下。先展开到面板，再贴卡片右缘打开，五项都能点到。
+    if (!isExpanded()) {
+      void setExpanded(true);
+      void whenPresented().then(() => {
+        if (!isExpanded() || drawerOpen || colorOpen || hotkeyOpen) return;
+        const box = app.getBoundingClientRect();
+        openMenu(box.right - 20, box.top + 28);
+      });
+      return;
+    }
     openMenu(e.clientX, e.clientY);
   });
   document.addEventListener("pointerdown", (e) => {
