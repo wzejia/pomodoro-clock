@@ -38,8 +38,8 @@
         <div class="controls">
           <button id="btn-primary" class="btn btn-primary">开始</button>
           <button id="btn-reset" class="btn">重置</button>
-          <button id="btn-switch" class="btn btn-switch">
-            <span class="switch-label">休息</span>
+          <button id="btn-switch" class="btn btn-switch" title="跳过本阶段，本次不计入" aria-label="跳过本阶段，本次不计入">
+            <span class="switch-label">跳过</span>
           </button>
         </div>
 
@@ -79,6 +79,7 @@
         </section>
 
         <div class="panel-foot">
+          <button id="btn-settings" class="foot-settings" type="button" aria-label="设置">设置</button>
           <button id="btn-collapse" class="collapse-btn" aria-label="收起">
             <svg viewBox="0 0 12 7" width="12" height="7"><path d="M1 6l5-5 5 5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>

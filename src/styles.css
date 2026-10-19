@@ -185,7 +185,7 @@ input:focus-visible {
   font-weight: 600;
   color: var(--text);
   flex-shrink: 0;
-  transition: color 0.4s ease;
+  transition: none;
 }
 .app[data-phase="short_break"] .pill-phase,
 .app[data-phase="long_break"] .pill-phase { color: var(--text); }
@@ -209,14 +209,15 @@ input:focus-visible {
 .app[data-status="paused"] .panel-time { opacity: 0.65; }
 
 /* ---------- v11 胶囊底部 2px 进度条 ----------
-   贴底边（bottom:0），左右 26px inset 对齐胶囊底边平段（R38 圆角在底部 2px 处弦宽约 168px），
-   小进度也不会被圆角裁没；轨道 var(--progress-track) 极细一档，填充随阶段变色。
+   胶囊 220×76、圆角钳到 R38。贴底（bottom:0）时 2px 条的底行被弧线裁成斜边，
+   上移到 bottom:4，整条厚度落在圆内；左右 26px 在该高度仍在弦界（约 x=21）内侧。
+   轨道 var(--progress-track) 极细一档，填充随阶段变色。
    几何与材质无关（v8 立法：材质规则不得碰几何），明暗/材质全走既有变量。 */
 .pill-progress {
   position: absolute;
   left: 26px;
   right: 26px;
-  bottom: 0;
+  bottom: 4px;
   height: 2px;
   border-radius: 999px;
   background: var(--progress-track);
@@ -266,8 +267,10 @@ input:focus-visible {
   height: 467px;
   display: flex;
   flex-direction: column;
-  padding: 20px 18px 14px;
-  gap: 14px;
+  /* 底栏 22px 把手须整段留在 467 内，下方约 6px。
+     顶 20→18、间距 14→10、底 14→6，把原先被窗口裁掉的把手抬进内容盒。 */
+  padding: 18px 18px 6px;
+  gap: 10px;
   opacity: 1;
   visibility: hidden;
   pointer-events: none;
@@ -352,6 +355,15 @@ input:focus-visible {
 [data-theme="dark"] .week-day,
 [data-theme="dark"] .focus-label,
 [data-theme="dark"] .pause-note { color: #c7c7cc; }
+/* 全局 input:focus-visible 是 2px 系统蓝框。这个字段是计时下方的一行标题，
+   整宽蓝框和面板的无边框文字冲突。焦点只留系统蓝插入符。 */
+.focus-label:focus,
+.focus-label:focus-visible {
+  outline: none;
+  box-shadow: none;
+  caret-color: var(--accent);
+  color: var(--text);
+}
 .pause-note {
   margin: -4px 0 8px;
   font-size: 13px;
@@ -369,10 +381,11 @@ input:focus-visible {
   letter-spacing: 0.08em;
   margin-bottom: 6px;
   color: var(--text);
-  transition: color 0.4s ease, opacity 0.12s var(--ios-smooth);
+  /* 只留展开淡入的 opacity。颜色若跟 0.4s，深色玻璃上「专注」会掠过不可读的灰。 */
+  transition: opacity 0.12s var(--ios-smooth);
 }
 .app.expanded .panel-phase {
-  transition: color 0.4s ease, opacity 0.46s var(--ios-smooth) 0.06s;
+  transition: opacity 0.46s var(--ios-smooth) 0.06s;
 }
 .app[data-phase="short_break"] .panel-phase,
 .app[data-phase="long_break"] .panel-phase { color: var(--text); }
@@ -430,10 +443,18 @@ input:focus-visible {
 .app[data-phase="long_break"] .cycle-dot.lit { background: var(--long); }
 /* v8 领导拍板：进行中第 N 个 = 半填充（iOS page control 中间态，R32 P2：只靠颜色不够，
    形状级差异=左半实填），介于空心（未到）与全亮（完成）之间；数据仍来自 Rust snapshot */
+/* 进行中：去掉描边。1.5px 边把 6px 圆的半填挤成破环。
+   左半实心，右半用 --progress-track，空的半边在浅色/深色/玻璃上都看得见。 */
 .cycle-dot.current {
   opacity: 1;
-  border-color: var(--work);
-  background: linear-gradient(90deg, var(--work) 50%, transparent 50%);
+  border: none;
+  background: linear-gradient(90deg, var(--work) 50%, var(--progress-track) 50%);
+}
+.app[data-phase="short_break"] .cycle-dot.current {
+  background: linear-gradient(90deg, var(--break) 50%, var(--progress-track) 50%);
+}
+.app[data-phase="long_break"] .cycle-dot.current {
+  background: linear-gradient(90deg, var(--long) 50%, var(--progress-track) 50%);
 }
 
 /* ---------- 控件 ---------- */
@@ -563,6 +584,8 @@ input:focus-visible {
 .chart-title { font-size: 12px; color: var(--text-tertiary); letter-spacing: 0.02em; }
 /* v10：紧凑分段控件（范围 周/月、单位 个数/分钟），配方同 .theme-switch 小一号 */
 .seg-switch { display: flex; background: var(--separator); border-radius: 7px; padding: 2px; gap: 2px; }
+/* 周/月 与 个数/分钟 等宽，标题才落在正中。不要动抽屉 .theme-switch 的 136px。 */
+.chart-head .seg-switch { width: 88px; flex: none; }
 .seg-opt {
   border: none;
   background: transparent;
@@ -574,6 +597,7 @@ input:focus-visible {
   cursor: pointer;
   transition: background-color 0.25s ease, color 0.25s ease;
 }
+.chart-head .seg-opt { flex: 1; text-align: center; }
 .seg-opt.active { background: var(--segment-active); color: var(--text); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
 [data-theme="dark"] .seg-opt { color: #c7c7cc; }
 [data-theme="dark"] .seg-opt.active {
@@ -959,12 +983,33 @@ input:focus-visible {
 /* ---------- 切换按钮（动态随阶段，纯文字与「重置」同风格） ---------- */
 .switch-label { font-size: 13px; }
 
-/* ---------- 面板底栏：齿轮已移除（设置入右键菜单），收起键居中 ---------- */
+/* ---------- 面板底栏：设置与收起把手并排居中，不压到图表 ---------- */
 .panel-foot {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
+/* 安静文字按钮，约 22px，与把手垂直居中。不用 44px .icon-btn，也不抢红色主按钮。 */
+.foot-settings {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 22px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  /* 13px 正文。--text-secondary 在玻璃底上只有约 4.0:1 / 3.7:1，改用主文字色。 */
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.foot-settings:hover { background: var(--separator); }
 
 /* ---------- 右键菜单（自绘苹果风：毛玻璃、圆角、弹簧入场，主题跟随变量） ---------- */
 .ctx-menu {
@@ -1032,16 +1077,20 @@ input:focus-visible {
   padding: 14px 18px;
   gap: 6px;
   transform: translateX(100%);
+  /* 不过渡 opacity：滑入时若边滑边淡，计时会透出来。打开即不透明，只动画位移。 */
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-  /* v17：与主 morph 同 280ms 同弹簧（全套节奏统一） */
-  transition: transform var(--dur-smooth) var(--ios-smooth), opacity var(--dur-smooth) var(--ios-smooth);
+  /* 只动画位移。收起时等滑出后再隐藏，避免边滑边淡把计时透出来。 */
+  transition: transform var(--dur-smooth) var(--ios-smooth), visibility 0s linear var(--dur-smooth);
   z-index: 20;
 }
 .app.drawer-open .drawer {
   transform: translateX(0);
   opacity: 1;
+  visibility: visible;
   pointer-events: auto;
+  transition: transform var(--dur-smooth) var(--ios-smooth), visibility 0s linear 0s;
 }
 .drawer-head {
   display: flex;
@@ -1544,11 +1593,11 @@ body.mock-preview .app {
   }
   .panel-phase,
   .app.expanded .panel-phase {
-    transition: color 0.4s ease, opacity 0.18s linear;
+    transition: opacity 0.18s linear;
   }
   .drawer {
     transform: none;
-    transition: opacity 0.18s linear;
+    transition: none;
   }
   .ctx-menu,
   .ctx-menu.open {
