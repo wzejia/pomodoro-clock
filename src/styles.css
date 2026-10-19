@@ -4,6 +4,7 @@
    ============================================================ */
 
 :root {
+  color-scheme: light;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
     "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 
@@ -29,6 +30,13 @@
   --bar-empty: rgba(0, 0, 0, 0.18);
   --input-bg: rgba(120, 120, 128, 0.18); /* v8④：0.14→0.18，浅色 Switch 关态旋钮/轨道/卡片三层明度拉开 */
   --track: rgba(120, 120, 128, 0.16); /* v8 R32 P2：空态短划只被 .week-track.empty 使用，0.1→0.16 提亮可发现性 */
+  /* Apple overlay knob（HIG Scroll views：滚动视图本身无外观，指示器是半透明胶囊）。
+     浅色黑 50%、深色白 50%，对齐 AppKit overlay / Chromium Mac
+     GetMacScrollbarThumbColor(is_overlay) 的 0x80。不复用 --track：那是图表空态，
+     深色档是压暗的灰，叠在深底上约 1.5:1，而且 scrollbar-width:thin 时根本用不上。 */
+  --scrollbar-thumb: rgb(0 0 0 / 50%);
+  --scrollbar-thumb-hover: rgb(0 0 0 / 66%);
+  --scrollbar-thumb-active: rgb(0 0 0 / 78%);
   --progress-track: rgba(0, 0, 0, 0.22);
   --segment-active: #ffffff;
   --btn-primary-bg: #1d1d1f;
@@ -53,6 +61,7 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #1c1c1e;
   --bg-solid: #1c1c1e;
   --surface: rgba(58, 58, 60, 0.9);
@@ -69,6 +78,9 @@
   --bar-empty: rgba(255, 255, 255, 0.22);
   --input-bg: rgba(120, 120, 128, 0.22);
   --track: rgba(120, 120, 128, 0.36); /* v8 R32 P2：深色空态短划提亮（0.2 在深卡上一瞥不可辨） */
+  --scrollbar-thumb: rgb(255 255 255 / 50%);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 72%);
+  --scrollbar-thumb-active: rgb(255 255 255 / 84%);
   --progress-track: rgba(255, 255, 255, 0.2);
   --segment-active: #636366; /* v8⑤：48484a→636366，深色分段选中 pill 与轨道明度差拉开 */
   --btn-primary-bg: rgba(255, 255, 255, 0.92);
@@ -1046,12 +1058,56 @@ input:focus-visible {
   gap: 3px; /* 贴 v11 space-evenly 时代缝密度（~3px），初始态末卡半露提示可滚 */
   overflow-y: auto;
   overscroll-behavior: contain; /* 防滚动链穿透到页面 */
-  scrollbar-width: thin;        /* Firefox 系 */
+  /* HIG：紧凑面板用 small scroller，且滚动视图本身无轨道外观。
+     AppKit small 轨宽 11px；overlay 旋钮四边内缩 2px，可见胶囊约 7px。
+     负外边距把这 11px 放进抽屉右 padding（18px），分组卡宽度不让给滚动条，
+     指示器落在卡片与窗口边缘之间，而不是嵌进表单。 */
+  --scrollbar-size: 11px;
+  margin-right: calc(var(--scrollbar-size) * -1);
+  width: calc(100% + var(--scrollbar-size));
+  scrollbar-gutter: stable;
+  /* 基类 .settings 的 14px 圆角 + overflow 会在滚到顶/底时削掉胶囊端头。
+     分组卡自有圆角，滚动口本身保持直角。 */
+  border-radius: 0;
 }
-/* WebView2=Chromium：4px 细滚动条，深浅主题随 --track 自适应 */
-.drawer .settings::-webkit-scrollbar { width: 4px; }
-.drawer .settings::-webkit-scrollbar-thumb { background: var(--track); border-radius: 2px; }
-.drawer .settings::-webkit-scrollbar-track { background: transparent; }
+/* 无 ::-webkit-scrollbar 的引擎（Firefox）走标准属性。Chromium 上若同时设置
+   scrollbar-width/scrollbar-color，会改画系统细滚动条并丢掉胶囊形——深色下那是一条浅色轨。 */
+@supports not selector(::-webkit-scrollbar) {
+  .drawer .settings {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+}
+.drawer .settings::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+  background: transparent;
+}
+/* WebView2 会在自定义滚动条两端补上下箭头；Apple 滚动指示器没有这对按钮。 */
+.drawer .settings::-webkit-scrollbar-button {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.drawer .settings::-webkit-scrollbar-track,
+.drawer .settings::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.drawer .settings::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border: 2px solid transparent; /* overlay 内缩 2px，轨道保持无外观 */
+  border-radius: 999px;
+  background-clip: padding-box;
+}
+/* 指向 / 拖拽时旋钮变粗一档并略实，对应 macOS 悬停展开的 overlay knob。 */
+.drawer .settings::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+  border-width: 1px;
+}
+.drawer .settings::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
+  border-width: 1px;
+}
 /* 08-16：卡片/caption 禁压缩——历史两轮（v6.1、08-16 目标节）都是内容超高时 flex-shrink+overflow:hidden
    把缺口均摊到每张卡、静默裁掉末行底部；shrink 归零后超高走滚动，不再无声吞行 */
 .drawer .settings > * { flex-shrink: 0; }
@@ -1418,6 +1474,16 @@ body.mock-preview .app {
 }
 /* Increased Contrast → 元素近纯黑/白 + 对比描边 */
 @media (prefers-contrast: more) {
+  :root {
+    --scrollbar-thumb: rgb(0 0 0 / 88%);
+    --scrollbar-thumb-hover: rgb(0 0 0 / 94%);
+    --scrollbar-thumb-active: rgb(0 0 0 / 100%);
+  }
+  [data-theme="dark"] {
+    --scrollbar-thumb: rgb(255 255 255 / 92%);
+    --scrollbar-thumb-hover: rgb(255 255 255 / 96%);
+    --scrollbar-thumb-active: #fff;
+  }
   .app,
   .drawer,
   .ctx-menu,
@@ -1447,6 +1513,13 @@ body.mock-preview .app {
     color: HighlightText !important;
   }
   .pill-time, .panel-time, .pause-note { color: CanvasText !important; }
+  /* 不设 scrollbar-color：Chromium 上它会改画系统滚动条（浅色轨 + 箭头），盖掉下面的胶囊。 */
+  .drawer .settings::-webkit-scrollbar-thumb,
+  .drawer .settings::-webkit-scrollbar-thumb:hover,
+  .drawer .settings::-webkit-scrollbar-thumb:active {
+    background-color: CanvasText;
+    border-color: Canvas;
+  }
 }
 
 .stepper-val input:focus-visible,
