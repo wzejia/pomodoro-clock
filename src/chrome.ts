@@ -163,10 +163,15 @@ async function endNativeDrag() {
   try { await bridge.invoke("drag_end"); } catch { /* 拖拽线程已结束 */ }
 }
 
+function isChromeControl(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el?.closest?.("button, input, textarea, select, a");
+}
+
 function attachThresholdDrag(el: HTMLElement) {
   el.addEventListener("mousedown", (e) => {
     if (e.button !== 0) return;
-    if ((e.target as HTMLElement).closest("button")) return;
+    if (isChromeControl(e.target)) return;
     dragging = false;
     downPos = { x: e.screenX, y: e.screenY };
     downTime = performance.now();
@@ -179,7 +184,7 @@ function attachThresholdDrag(el: HTMLElement) {
   el.addEventListener("mouseup", (e) => {
     endNativeDrag();
     if (!downPos) return;
-    if ((e.target as HTMLElement).closest("button")) { downPos = null; return; }
+    if (isChromeControl(e.target)) { downPos = null; return; }
     const moved = Math.hypot(e.screenX - downPos.x, e.screenY - downPos.y);
     const quick = performance.now() - downTime < 500;
     downPos = null;

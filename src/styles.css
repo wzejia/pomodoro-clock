@@ -314,6 +314,9 @@ input:focus-visible {
   font-size: 13px;
   text-align: center;
   outline: none;
+  /* .panel-timer 为 none，让计时区的点击落到标题栏拖拽。输入框必须单独接回指针，否则点不中、无法打字。 */
+  pointer-events: auto;
+  cursor: text;
 }
 .focus-label::placeholder { color: var(--text-tertiary); }
 .export-row { flex-wrap: wrap; gap: 8px; }
