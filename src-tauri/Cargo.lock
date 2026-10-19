@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "pomodoro-clock"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "chrono",
  "serde",
