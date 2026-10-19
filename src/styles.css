@@ -177,6 +177,11 @@ input:focus-visible {
 }
 .app[data-phase="short_break"] .pill-phase,
 .app[data-phase="long_break"] .pill-phase { color: var(--text); }
+/* 自定义阶段色激活时（settings.ts 打 data-custom-phase），阶段名恢复跟随 --*-text。
+   var(..., var(--text)) 兜底：只自定义了个别阶段时，其余阶段名回退主文字色。 */
+[data-custom-phase] .pill-phase { color: var(--work-text, var(--text)); }
+[data-custom-phase] .app[data-phase="short_break"] .pill-phase { color: var(--break-text, var(--text)); }
+[data-custom-phase] .app[data-phase="long_break"] .pill-phase { color: var(--long-text, var(--text)); }
 
 .pill-time {
   flex: 1;
@@ -356,6 +361,10 @@ input:focus-visible {
 }
 .app[data-phase="short_break"] .panel-phase,
 .app[data-phase="long_break"] .panel-phase { color: var(--text); }
+/* 同 pill-phase：自定义阶段色激活时恢复 --*-text，未定义阶段回退主文字色 */
+[data-custom-phase] .panel-phase { color: var(--work-text, var(--text)); }
+[data-custom-phase] .app[data-phase="short_break"] .panel-phase { color: var(--break-text, var(--text)); }
+[data-custom-phase] .app[data-phase="long_break"] .panel-phase { color: var(--long-text, var(--text)); }
 
 .panel-time {
   font-size: 56px;
